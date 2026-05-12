@@ -1,0 +1,21 @@
+{# 单只股票信息卡片 — Jinja2 #}
+## {{ stock.code }} {{ stock.name }} — {{ recommendation }}
+
+| 类别 | 指标 | 数值 |
+|------|------|------|
+| 📈 行情 | 当前价 | {{ "%.2f"|format(stock.price) }} |
+| 📈 行情 | 涨跌幅 | {{ "%+.2f%%"|format(stock.change_pct) }} |
+| 📈 行情 | 成交额 | {{ "%.2f"|format(stock.turnover/1e8) }}亿 |
+| 📈 行情 | 换手率 | {{ "%.1f%%"|format(stock.turnover_rate) }} |
+| 🔍 异动 | 类型 | {{ stock.anomaly_type }} |
+| 🔍 异动 | 尾盘涨幅 | {{ "%+.2f%%"|format(stock.late_price_change) }} |
+| 🔍 异动 | 量比 | {{ "%.1f"|format(stock.afternoon_volume_ratio) }}x |
+| 💰 资金 | 大单净流入 | {{ "%.0f"|format(stock.big_order_net/1e4) }}万 |
+| 💰 资金 | 大单占比 | {{ "%.1f%%"|format(stock.big_order_ratio*100) }} |
+| 💰 资金 | 主动买入 | {{ "%.1f%%"|format(stock.active_buy_ratio) }} |
+| 📊 技术 | 均线状态 | {{ stock.ma_alignment }} |
+| 📊 技术 | 20日位置 | {{ "%.0f%%"|format(stock.position_20d) }} |
+| 🏢 板块 | {{ stock.sector }} | {{ "%+.2f%%"|format(stock.sector_performance) }} |
+| 🤖 LLM | 决策 | {{ stock.llm_decision }} ({{ stock.llm_confidence }}) |
+| 🤖 LLM | 理由 | {{ stock.llm_reason }} |
+| 🎯 评分 | 综合 | {{ "%.0f"|format(stock.final_score) }}/100 |

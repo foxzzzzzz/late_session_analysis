@@ -1,0 +1,82 @@
+{# 尾盘分析主报告模板 — Jinja2 #}
+# 📊 尾盘分析报告
+
+**日期**: {{ date }} | **时间**: {{ time }}
+**数据源**: {{ data_source }}
+
+---
+
+{% if stats.llm_fallback_count > 0 or stats.llm_disabled %}
+## ⚠️ 重要提示：LLM分析未完全生效
+
+{% if stats.llm_disabled %}
+> **LLM功能已禁用** — 本报告所有推荐**仅基于规则评分引擎**生成，
+> 未经过AI模型综合研判。建议结合人工判断使用，降低仓位。
+{% else %}
+> **{{ stats.llm_fallback_count }}/{{ stats.llm_total }} 只标的的LLM分析降级为规则评分**
+> (原因：API超时/调用失败)。
+> 标记为 `[规则]` 的标的**未经过AI模型验证**，信号可靠性降低，
+> 建议优先关注未降级的标的，或降低降级标的的仓位。
+{% endif %}
+
+---
+
+{% endif %}
+
+## 📈 最终推荐
+
+{% for stock in strong_buy %}
+### 🔥 {{ stock.code }} {{ stock.name }} — **强烈买入** ({{ "%.0f"|format(stock.final_score) }}分){% if stock.llm_fallback %} ⚠️[规则]{% endif %}
+
+{% if stock.llm_fallback %}
+> **注意：此标的LLM分析未生效，以下结论为规则评分引擎生成，请谨慎参考。**
+{% endif %}
+
+| 指标 | 数值 | 指标 | 数值 |
+|------|------|------|------|
+| 当前价 | {{ "%.2f"|format(stock.price) }} | 涨跌幅 | {{ "%+.2f%%"|format(stock.change_pct) }} |
+| 尾盘涨幅 | {{ "%+.2f%%"|format(stock.late_price_change) }} | 异动类型 | {{ stock.anomaly_type }} |
+| 量比(午后/上午) | {{ "%.1f"|format(stock.afternoon_volume_ratio) }}x | 换手率 | {{ "%.1f%%"|format(stock.turnover_rate) }} |
+| 大单流入 | {{ "%.0f"|format(stock.big_order_net/1e4) }}万 | 评分 | {{ "%.0f"|format(stock.total_score) }}/100 |
+| LLM决策 | {{ stock.llm_decision }} ({{ stock.llm_confidence }}) | LLM理由 | {{ stock.llm_reason }} |
+
+{% endfor %}
+
+{% if buy_stocks %}
+### ✅ 建议买入
+
+| 排名 | 代码 | 名称 | 评分 | 尾盘涨幅 | LLM置信度 | 异动类型 | 备注 |
+|------|------|------|------|----------|-----------|----------|------|
+{% for s in buy_stocks %}
+| {{ s.final_rank }} | {{ s.code }} | {{ s.name }} | {{ "%.0f"|format(s.final_score) }} | {{ "%+.2f%%"|format(s.late_price_change) }} | {{ s.llm_confidence }}{% if s.llm_fallback %}[规则]{% endif %} | {{ s.anomaly_type }} | {% if s.llm_fallback %}⚠{% else %}✓{% endif %} |
+{% endfor %}
+{% endif %}
+
+{% if watch_stocks %}
+### 👀 观察池
+
+| 排名 | 代码 | 名称 | 评分 | 尾盘涨幅 | 异动类型 | 备注 |
+|------|------|------|------|----------|----------|------|
+{% for s in watch_stocks %}
+| {{ s.final_rank }} | {{ s.code }} | {{ s.name }} | {{ "%.0f"|format(s.final_score) }} | {{ "%+.2f%%"|format(s.late_price_change) }} | {{ s.anomaly_type }} | {% if s.llm_fallback %}⚠{% else %}—{% endif %} |
+{% endfor %}
+{% endif %}
+
+---
+
+## 📊 运行统计
+
+| 阶段 | 输入 | 输出 | 通过率 |
+|------|------|------|--------|
+| L1 基础准入 | {{ stats.initial }} | {{ stats.l1 }} | {{ "%.1f%%"|format(stats.l1_ratio) }} |
+| L2 尾盘异动 | {{ stats.l1 }} | {{ stats.l2 }} | {{ "%.1f%%"|format(stats.l2_ratio) }} |
+| L3 技术验证 | {{ stats.l2 }} | {{ stats.l3 }} | {{ "%.1f%%"|format(stats.l3_ratio) }} |
+| L4 量化评分 | {{ stats.l3 }} | {{ stats.l4 }} | — |
+
+**总耗时**: {{ "%.1f"|format(stats.elapsed) }}秒
+
+{% if stats.llm_disabled %}
+**LLM分析**: 未启用 (纯规则评分模式)
+{% else %}
+**LLM分析**: {{ stats.llm_success }}/{{ stats.llm_total }} 成功{% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只降级为规则评分{% endif %}
+{% endif %}
