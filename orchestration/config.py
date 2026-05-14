@@ -13,7 +13,10 @@ class SystemConfig:
     """尾盘分析系统全局配置"""
 
     # === 数据源 ===
-    data_providers: list[str] = field(default_factory=lambda: ["efinance", "akshare"])
+    data_providers: list[str] = field(default_factory=lambda: ["tencent", "sector_based", "sina", "efinance", "akshare"])
+    target_sectors: list[str] = field(default_factory=list)
+    rate_limit_min_sleep: float = 1.5
+    rate_limit_max_sleep: float = 3.0
 
     # === LLM ===
     llm_provider: str = ""
@@ -49,6 +52,12 @@ class SystemConfig:
     # === 并行 ===
     max_data_workers: int = 3
 
+    # === 百度资金流向 ===
+    enable_capital_flow: bool = True
+
+    # === 北向资金情绪 ===
+    enable_northbound: bool = True
+
     # === 调度 ===
     schedule_enabled: bool = False
     schedule_time: str = "14:29"
@@ -58,6 +67,19 @@ class SystemConfig:
 
     def _load_from_env(self):
         """从环境变量加载配置"""
+        # 数据源优先级
+        dp_env = os.getenv("DATA_PROVIDER_PRIORITY", "")
+        if dp_env:
+            self.data_providers = [s.strip() for s in dp_env.split(",") if s.strip()]
+
+        # 目标板块
+        sectors_env = os.getenv("TARGET_SECTORS", "")
+        if sectors_env:
+            self.target_sectors = [s.strip() for s in sectors_env.split(",") if s.strip()]
+
+        self.rate_limit_min_sleep = float(os.getenv("RATE_LIMIT_MIN_SLEEP", str(self.rate_limit_min_sleep)))
+        self.rate_limit_max_sleep = float(os.getenv("RATE_LIMIT_MAX_SLEEP", str(self.rate_limit_max_sleep)))
+
         if not self.llm_provider:
             self.llm_provider = os.getenv("LLM_PROVIDER", "deepseek")
         if not self.llm_model:
@@ -86,6 +108,8 @@ class SystemConfig:
         report_dir = os.getenv("REPORT_OUTPUT_DIR", "")
         if report_dir:
             self.report_output_dir = report_dir
+
+        self.enable_northbound = os.getenv("ENABLE_NORTHBOUND", "true").lower() != "false"
 
     def need_llm(self) -> bool:
         """是否配置了LLM"""

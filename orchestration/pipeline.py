@@ -16,6 +16,12 @@ from data_provider.manager import DataFetcherManager
 from data_provider.preloader import DataPreloader
 from data_provider.efinance_fetcher import EfinanceFetcher
 from data_provider.akshare_fetcher import AkshareFetcher
+from data_provider.sector_fetcher import SectorBasedFetcher
+from data_provider.sina_fetcher import SinaFetcher
+from data_provider.tencent_fetcher import TencentFetcher
+from data_provider.eastmoney_flow_fetcher import EastmoneyFlowFetcher
+from data_provider.northbound_fetcher import get_northbound_sentiment
+from data_provider.concept_analyzer import get_concept_analyzer
 from screening.context import StockContext
 from screening.funnel import FunnelPipeline, FunnelConfig
 from screening.cache import StockMetricsCache
@@ -49,6 +55,17 @@ class LateSessionPipeline:
             cache=self.cache,
         )
 
+        # 初始化资金流向 (东方财富替代百度)
+        self.baidu_flow: Optional[EastmoneyFlowFetcher] = None
+        if config.enable_capital_flow:
+            self.baidu_flow = EastmoneyFlowFetcher(timeout=15.0)
+
+        # 初始化题材分析器
+        self.concept_analyzer = get_concept_analyzer()
+
+        # 北向资金情绪 (S3阶段获取)
+        self.northbound_sentiment: Optional[dict] = None
+
         # 初始化LLM (如果配置了)
         self.llm_client: Optional[LLMClient] = None
         self.llm_runner: Optional[ParallelLLMRunner] = None
@@ -66,7 +83,17 @@ class LateSessionPipeline:
     def _init_fetchers(self) -> DataFetcherManager:
         fetchers = []
         for name in self.config.data_providers:
-            if name == "efinance":
+            if name == "sector_based":
+                fetchers.append(SectorBasedFetcher(
+                    sectors=self.config.target_sectors or None,
+                    min_sleep=self.config.rate_limit_min_sleep,
+                    max_sleep=self.config.rate_limit_max_sleep,
+                ))
+            elif name == "sina":
+                fetchers.append(SinaFetcher())
+            elif name == "tencent":
+                fetchers.append(TencentFetcher())
+            elif name == "efinance":
                 fetchers.append(EfinanceFetcher())
             elif name == "akshare":
                 fetchers.append(AkshareFetcher())
@@ -90,6 +117,10 @@ class LateSessionPipeline:
         # 预加载
         if self.preloader and not self.preloader.is_loaded():
             self.preloader.load_all()
+
+        # 题材热度分析 (基于预加载的热点数据)
+        if self.preloader and self.preloader.hot_concepts:
+            self.concept_analyzer.analyze(self.preloader.hot_concepts)
 
         try:
             all_contexts = []
@@ -140,20 +171,60 @@ class LateSessionPipeline:
                 is_st=q.is_st,
                 is_suspended=q.is_suspended,
                 sector=q.sector,
+                market_cap=q.market_cap,
+                pe_ttm=q.pe_ttm,
+                pb=q.pb,
+                vol_ratio=q.vol_ratio,
+                amplitude=q.amplitude,
             )
             contexts.append(ctx)
         return contexts
 
     def _enrich_contexts(self, contexts: list[StockContext]):
-        """用盘口数据增强StockContext (如果有pytdx可用)"""
-        # MVP阶段：efinance/akshare不提供盘口，暂跳过
-        pass
+        """用快照/预加载数据增强StockContext"""
+        for ctx in contexts:
+            # 用量比近似午后量比 (vol_ratio > 1 表示今日量大于近期均量)
+            if ctx.vol_ratio > 0 and ctx.afternoon_volume_ratio == 0:
+                ctx.afternoon_volume_ratio = ctx.vol_ratio
+
+            # 用当日涨跌幅近似尾盘价格变动
+            if ctx.late_price_change == 0 and ctx.change_pct != 0:
+                ctx.late_price_change = abs(ctx.change_pct)
+
+            # 接近日内新高视为突破
+            if ctx.high > 0 and ctx.price >= ctx.high * 0.98:
+                ctx.broke_high = True
+
+            # 量比>1.5 设置量占比
+            if ctx.vol_ratio >= 1.5 and ctx.last_5min_volume_pct == 0:
+                ctx.last_5min_volume_pct = max(ctx.vol_ratio * 5, 8.0)
+
+            # 用振幅近似波动率
+            if ctx.volatility == 0 and ctx.amplitude > 0:
+                ctx.volatility = ctx.amplitude * 5
+
+            # 用昨收近似MA5 (K线数据不可用时)
+            if ctx.ma5 == 0 and ctx.pre_close > 0:
+                ctx.ma5 = ctx.pre_close * 0.98
+            if ctx.ma10 == 0 and ctx.pre_close > 0:
+                ctx.ma10 = ctx.pre_close * 0.97
+
+            # 解禁检查 (来自预加载)
+            if self.preloader and ctx.code in self.preloader.unlock_stocks:
+                ctx.is_unlock_date = True
+
+            # 热点题材 (来自预加载)
+            if self.preloader and ctx.code in self.preloader.hot_concepts:
+                ctx.hot_concepts = self.preloader.hot_concepts[ctx.code]
+                if ctx.hot_concepts:
+                    ctx.leader_strength = True
 
     def _run_stage1(self) -> tuple:
-        """S1: 初始扫描 L1+L2"""
+        """S1: 初始扫描 L1+L2 (不依赖资金流向,快速过滤)"""
         self.tracker.stage_start("S1_扫描", 5000)
 
         contexts = self._fetch_and_convert()
+        self._enrich_contexts(contexts)
         contexts = self.funnel.run(contexts, stage=1)
         top30 = self.funnel.get_top(contexts, 30)
 
@@ -166,6 +237,7 @@ class LateSessionPipeline:
 
         # 刷新数据后重新过L2+L3 (继承S1的L1缓存结果)
         contexts = self._fetch_and_convert()
+        self._enrich_contexts(contexts)
         contexts = self.funnel.run(contexts, stage=2)
         top30 = self.funnel.get_top(contexts, 30)
 
@@ -173,12 +245,52 @@ class LateSessionPipeline:
         return contexts, top30
 
     def _run_stage3(self, all_contexts: list, top30: list) -> tuple:
-        """S3: 最后验证 L4评分"""
+        """S3: L3技术验证 → 百度资金富化 → L4评分"""
         self.tracker.stage_start("S3_验证", len(all_contexts))
 
-        # 只对通过L2的继续过L3+L4
         l2_passed = [c for c in all_contexts if c.l2_passed]
-        scored = self.funnel.run(l2_passed, stage=3)
+
+        # L3 技术面验证
+        from screening.layer3_technical import screen_l3_technical
+        l3_passed = screen_l3_technical(l2_passed, self.preloader, self.funnel.config.l3)
+        self.funnel.stats['l3_count'] = len(l3_passed)
+        logger.info(f"L3 通过: {len(l3_passed)} 只")
+
+        # 百度资金流向富化 (L3通过仅30-50只, API调用量可控)
+        if self.baidu_flow and l3_passed:
+            logger.info(f"百度资金流向: 富化 {len(l3_passed)} 只 L3 通过股...")
+            codes = [c.code for c in l3_passed]
+            flow_data = self.baidu_flow.enrich_batch(codes)
+            for ctx in l3_passed:
+                fd = flow_data.get(ctx.code, {})
+                if fd:
+                    ctx.big_order_net = fd.get("mainForce", 0) * 10000
+                    ctx.big_order_ratio = (
+                        abs(ctx.big_order_net) / max(ctx.turnover, 1)
+                        if ctx.turnover > 0 else 0
+                    )
+                    ctx.active_buy_ratio = fd.get("active_buy_ratio", 50.0)
+            logger.info(f"百度资金流向: 获得 {len(flow_data)} 只有效数据")
+
+        # 北向资金情绪 (S3阶段获取，非交易时段降级为空)
+        self.northbound_sentiment = {"available": False}
+        if self.config.enable_northbound:
+            nb = get_northbound_sentiment()
+            if nb:
+                self.northbound_sentiment = nb
+        if self.northbound_sentiment.get("available"):
+            logger.info(
+                f"北向资金: 净买入 {self.northbound_sentiment['today_net_yi']}亿, "
+                f"趋势分 {self.northbound_sentiment['trend_score']:.0f}, "
+                f"情绪: {self.northbound_sentiment['trend_label']}"
+            )
+
+        # L4 评分 (注入北向情绪 + 题材分析)
+        from screening.layer4_scoring import score_l4, set_northbound_sentiment, set_concept_analyzer
+        set_northbound_sentiment(self.northbound_sentiment)
+        set_concept_analyzer(self.concept_analyzer)
+        scored = score_l4(l3_passed, self.funnel.config.l4)
+        self.funnel.stats['l4_count'] = len(scored)
         top30 = self.funnel.get_top(scored, 30)
 
         self.tracker.stage_end("S3_验证", len(scored))
@@ -192,9 +304,14 @@ class LateSessionPipeline:
         if self.llm_runner:
             self.tracker.llm_total = len(top30)
             llm_results = self.llm_runner.analyze_batch(top30)
+            # API调用成功(非fallback) vs API调用失败(fallback)
             self.tracker.llm_success = sum(
                 1 for r in llm_results.values()
-                if r.get('confidence', 'C') != 'C' or r.get('decision') != 'skip'
+                if not r.get('fallback', False)
+            )
+            self.tracker.llm_buy_signals = sum(
+                1 for r in llm_results.values()
+                if r.get('decision') == 'buy'
             )
         else:
             llm_results = {}
@@ -213,6 +330,8 @@ class LateSessionPipeline:
 
         # 汇总统计
         llm_fallback_count = sum(1 for c in top30 if c.llm_fallback)
+        nb_data = self.northbound_sentiment or {}
+        concept_dist = self.concept_analyzer.get_concept_distribution() if self.concept_analyzer.is_analyzed else {}
         stats = {
             'initial': 5000,
             'l1': self.funnel.stats.get('l1_count', 0),
@@ -223,10 +342,20 @@ class LateSessionPipeline:
             'l2_ratio': self.funnel.stats.get('l2_count', 0) / max(self.funnel.stats.get('l1_count', 1), 1) * 100 if self.funnel.stats.get('l1_count') else 0,
             'l3_ratio': self.funnel.stats.get('l3_count', 0) / max(self.funnel.stats.get('l2_count', 1), 1) * 100 if self.funnel.stats.get('l2_count') else 0,
             'elapsed': self.funnel.stats.get('elapsed', 0),
-            'llm_success': self.tracker.llm_success,
+            'llm_api_success': self.tracker.llm_success,
             'llm_total': self.tracker.llm_total,
             'llm_fallback_count': llm_fallback_count,
+            'llm_buy_signals': getattr(self.tracker, 'llm_buy_signals', 0),
             'llm_disabled': self.llm_client is None,
+            'capital_data_available': any(c.big_order_net != 0 for c in top30),
+            # P2: 北向资金 + 题材热度
+            'northbound_available': nb_data.get("available", False),
+            'northbound_today_net': nb_data.get("today_net_yi", 0),
+            'northbound_trend': nb_data.get("trend_score", 50),
+            'northbound_label': nb_data.get("trend_label", "N/A"),
+            'concept_total': concept_dist.get("total_concepts", 0),
+            'concept_top5': concept_dist.get("top10", [])[:5],
+            'concept_occurrences': concept_dist.get("total_occurrences", 0),
         }
 
         md = render_report(

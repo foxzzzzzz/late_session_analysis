@@ -1,4 +1,5 @@
 """akshare 数据源 — 备选降级数据源"""
+import time
 import logging
 import pandas as pd
 from data_provider.base import BaseFetcher, RealtimeQuote
@@ -15,7 +16,7 @@ class AkshareFetcher(BaseFetcher):
 
     @property
     def priority(self) -> int:
-        return 1
+        return 3
 
     def is_available(self) -> bool:
         try:
@@ -26,9 +27,23 @@ class AkshareFetcher(BaseFetcher):
 
     def fetch_snapshot(self) -> list[RealtimeQuote]:
         import akshare as ak
-        df = ak.stock_zh_a_spot_em()
-        if df is None or df.empty:
+        t0 = time.time()
+        try:
+            df = ak.stock_zh_a_spot_em()
+        except Exception as e:
+            elapsed = time.time() - t0
+            logger.error(f"akshare API调用失败 ({elapsed:.1f}s): {type(e).__name__}: {e}")
+            raise
+        elapsed = time.time() - t0
+        if df is None:
+            logger.error(f"akshare 返回 None ({elapsed:.1f}s)")
             raise ValueError("akshare 返回空数据")
+        if df.empty:
+            logger.error(f"akshare 返回空DataFrame ({elapsed:.1f}s)")
+            raise ValueError("akshare 返回空数据")
+        logger.info(f"akshare API返回: {len(df)}行, {len(df.columns)}列 ({elapsed:.1f}s)")
+        logger.info(f"akshare 列名: {list(df.columns)[:12]}")
+        logger.info(f"akshare 首行样例: {df.iloc[0].to_dict()}")
         return self._parse_dataframe(df)
 
     def fetch_depth(self, codes: list[str]) -> dict[str, dict]:

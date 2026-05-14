@@ -27,6 +27,10 @@ class StockContext:
     is_suspended: bool = False
     sector: str = ""
     market_cap: float = 0.0
+    pe_ttm: float = 0.0        # 市盈率(TTM)
+    pb: float = 0.0            # 市净率
+    vol_ratio: float = 0.0     # 量比
+    amplitude: float = 0.0     # 振幅%
 
     # === L1: 流动性过滤(计算值) ===
     afternoon_volume: float = 0.0       # 14:30后成交量

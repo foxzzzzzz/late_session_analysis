@@ -33,7 +33,7 @@ class L2Config:
     # 开关
     require_volume: bool = True
     require_price_pattern: bool = True
-    require_capital: bool = False         # MVP阶段资金流向数据源可能不完整
+    require_capital: bool = False         # 资金流向数据在L4评分阶段注入
     require_orderbook: bool = False       # MVP阶段盘口数据来自pytdx(可选)
 
 

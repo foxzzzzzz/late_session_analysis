@@ -17,7 +17,7 @@ class LLMClient:
         api_base: Optional[str] = None,
         max_tokens: int = 512,
         temperature: float = 0.3,
-        timeout: int = 15,
+        timeout: int = 30,
     ):
         self.provider = provider or os.getenv("LLM_PROVIDER", "deepseek")
         self.model = model or os.getenv("LLM_MODEL", "deepseek-chat")

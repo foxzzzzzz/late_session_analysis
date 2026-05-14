@@ -54,7 +54,8 @@ def make_stock_prompt(ctx) -> str:
     if ctx.sector:
         lines.append(f"板块: {ctx.sector}({ctx.sector_performance:+.2f}%)")
 
-    lines.append(f"综合评分: {ctx.total_score:.0f}/100")
-    lines.append(f"历史相似形态胜率: {ctx.history_win_rate:.0f}%")
+    if ctx.history_win_rate > 0:
+        lines.append(f"历史相似形态胜率: {ctx.history_win_rate:.0f}%")
+    lines.append("请独立判断，不要受他方评分影响。")
 
     return "\n".join(lines)

@@ -1,4 +1,5 @@
 """efinance 数据源 — 主数据源，全市场实时快照"""
+import time
 import logging
 import pandas as pd
 from data_provider.base import BaseFetcher, RealtimeQuote
@@ -15,7 +16,7 @@ class EfinanceFetcher(BaseFetcher):
 
     @property
     def priority(self) -> int:
-        return 0
+        return 2
 
     def is_available(self) -> bool:
         try:
@@ -26,10 +27,41 @@ class EfinanceFetcher(BaseFetcher):
 
     def fetch_snapshot(self) -> list[RealtimeQuote]:
         import efinance as ef
-        df = ef.stock.get_realtime_quotes()
-        if df is None or df.empty:
-            raise ValueError("efinance 返回空数据")
-        return self._parse_dataframe(df)
+        t0 = time.time()
+        try:
+            df = ef.stock.get_realtime_quotes()
+        except Exception as e:
+            elapsed = time.time() - t0
+            logger.error(f"efinance API调用失败 ({elapsed:.1f}s): {type(e).__name__}: {e}")
+            raise
+        elapsed = time.time() - t0
+        if df is None:
+            logger.error(f"efinance 返回 None ({elapsed:.1f}s) — API可能不可用")
+            raise ValueError("efinance 返回空数据 (None)")
+        if df.empty:
+            logger.error(f"efinance 返回空DataFrame ({elapsed:.1f}s) — 可能非交易时段")
+            raise ValueError("efinance 返回空数据 (空DataFrame)")
+        logger.info(f"efinance API返回: {len(df)}行, {len(df.columns)}列 ({elapsed:.1f}s)")
+        logger.info(f"efinance 列名: {list(df.columns)[:12]}")
+        logger.info(f"efinance 首行样例: {df.iloc[0].to_dict()}")
+        results = self._parse_dataframe(df)
+        if not results:
+            col_map = self._get_column_mapping(df)
+            # 诊断: 检查有多少行的code为空
+            code_col = col_map.get('code', '代码')
+            empty_code_count = sum(1 for _, row in df.iterrows()
+                                   if not str(row.get(code_col, '')).strip())
+            logger.error(
+                f"efinance 解析失败: {len(df)}行DataFrame → 0只股票. "
+                f"code列为空的行数: {empty_code_count}/{len(df)}. "
+                f"列映射: {col_map}"
+            )
+            raise ValueError(
+                f"efinance 解析失败: DataFrame有{len(df)}行但无法提取有效数据, "
+                f"可能原因: 非交易时段(9:30-15:00)/API格式变更/IP被限 "
+                f"(检测到列: {list(df.columns)[:8]})"
+            )
+        return results
 
     def fetch_depth(self, codes: list[str]) -> dict[str, dict]:
         """efinance 不提供盘口深度"""

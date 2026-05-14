@@ -3,10 +3,11 @@
 从L3通过的30-50只中精选5-10只核心标的
 
 100分制评分模型：
-- 尾盘强度 35%: 涨幅(10) + 放量(10) + 大单(10) + 封单(5)
-- 技术面 25%: 突破(10) + 均线(8) + 量价(7)
-- 资金面 20%: 主力净流入(10) + 机构动向(10)
-- 市场环境 15%: 板块强度(8) + 概念热度(7)
+- 尾盘强度 30%: 涨幅(10) + 放量(10) + 大单(10) + 封单(5)
+- 技术面 20%: 突破(10) + 均线(8) + 量价(7)
+- 资金面 15%: 主力净流入(10) + 机构动向(10)
+- 市场环境 15%: 板块强度(8) + 概念热度(7) + 北向情绪(5)
+- 基本面 15%: PE估值 + PB + 市值 + 题材热度
 - 历史胜率 5%: 相似形态历史表现(5)
 
 分数等级：
@@ -19,6 +20,22 @@ from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# 模块级北向情绪数据 (由 pipeline 在调用前注入)
+_northbound_sentiment: Optional[dict] = None
+_concept_analyzer = None
+
+
+def set_northbound_sentiment(data: Optional[dict]):
+    """注入北向资金情绪数据"""
+    global _northbound_sentiment
+    _northbound_sentiment = data
+
+
+def set_concept_analyzer(analyzer):
+    """注入题材热度分析器"""
+    global _concept_analyzer
+    _concept_analyzer = analyzer
 
 
 @dataclass
@@ -42,6 +59,18 @@ def score_l4(
     if config is None:
         config = L4Config()
 
+    # 检测资金流数据是否可用 (非交易时段百度API返回空)
+    has_capital = any(
+        ctx.big_order_net != 0 or ctx.big_order_ratio > 0
+        for ctx in contexts
+    )
+
+    # 权重: 有资金数据时capital占15%，缺失时重新分配给尾盘+技术
+    if has_capital:
+        w_tail, w_tech, w_cap, w_env, w_hist, w_fund = 0.30, 0.20, 0.15, 0.15, 0.05, 0.15
+    else:
+        w_tail, w_tech, w_cap, w_env, w_hist, w_fund = 0.38, 0.27, 0.00, 0.15, 0.05, 0.15
+
     for ctx in contexts:
         ctx.score_tail_strength = _score_tail_strength(ctx)
         ctx.score_technical = _score_technical(ctx)
@@ -50,11 +79,12 @@ def score_l4(
         ctx.score_history = _score_history(ctx)
 
         ctx.total_score = (
-            ctx.score_tail_strength * 0.35 +
-            ctx.score_technical * 0.25 +
-            ctx.score_capital * 0.20 +
-            ctx.score_market_env * 0.15 +
-            ctx.score_history * 0.05
+            ctx.score_tail_strength * w_tail +
+            ctx.score_technical * w_tech +
+            ctx.score_capital * w_cap +
+            ctx.score_market_env * w_env +
+            ctx.score_history * w_hist +
+            _score_fundamental(ctx) * w_fund
         )
 
     contexts.sort(key=lambda c: c.total_score, reverse=True)
@@ -185,10 +215,11 @@ def _score_capital(ctx) -> float:
 
 
 def _score_market_env(ctx) -> float:
-    """市场环境评分 0-100"""
+    """市场环境评分 0-100 (含北向资金情绪 + 题材热度加权)"""
     score = 0.0
+    max_possible = 18.0
 
-    # 板块强度 (8分权重)
+    # 板块强度 (8分)
     sector_pct = ctx.sector_performance
     if sector_pct >= 3:
         score += 8
@@ -199,15 +230,33 @@ def _score_market_env(ctx) -> float:
     elif sector_pct >= -1:
         score += 1
 
-    # 概念热度 (7分权重)
-    concept_score = min(len(ctx.hot_concepts) * 3, 7)
+    # 概念热度 (7分) — 加权热度，不仅看个数
+    concept_score = 0.0
+    if _concept_analyzer and _concept_analyzer.is_analyzed and ctx.hot_concepts:
+        concept_score = _concept_analyzer.get_concept_score(ctx.hot_concepts) * 0.7
+    else:
+        concept_score = min(len(ctx.hot_concepts) * 3, 7)
     score += concept_score
 
     # 龙头效应
     if ctx.leader_strength:
         score += 3
 
-    return min(score * 100 / 18, 100)  # 总分最多18,归一化
+    # 北向资金情绪 (5分附加分)
+    nb_bonus = 0.0
+    if _northbound_sentiment and _northbound_sentiment.get("available"):
+        trend = _northbound_sentiment["trend_score"]
+        if trend >= 70:
+            nb_bonus = 5
+        elif trend >= 55:
+            nb_bonus = 3
+        elif trend >= 45:
+            nb_bonus = 1
+        # trend < 45 不加分
+        max_possible += 5  # 北向加分时提高满分上限
+    score += nb_bonus
+
+    return min(score * 100 / max_possible, 100)
 
 
 def _score_history(ctx) -> float:
@@ -222,3 +271,42 @@ def _score_history(ctx) -> float:
         return 30.0
     else:
         return 10.0
+
+
+def _score_fundamental(ctx) -> float:
+    """基本面评分 0-100 — PE估值 + 市值质量 + 题材热度"""
+    score = 0.0
+
+    # PE估值 (PE>0且合理时加分)
+    if 0 < ctx.pe_ttm <= 15:
+        score += 40
+    elif 0 < ctx.pe_ttm <= 25:
+        score += 35
+    elif 0 < ctx.pe_ttm <= 40:
+        score += 25
+    elif 0 < ctx.pe_ttm <= 80:
+        score += 15
+    elif ctx.pe_ttm > 80:
+        score += 5  # 高PE不直接0分，可能是成长股
+
+    # PB估值 (PB适中加分)
+    if 0 < ctx.pb <= 3:
+        score += 25
+    elif 0 < ctx.pb <= 6:
+        score += 15
+    elif ctx.pb > 6:
+        score += 5
+
+    # 市值质量 (中大盘更稳定)
+    if ctx.market_cap >= 500:
+        score += 15
+    elif ctx.market_cap >= 100:
+        score += 10
+    elif ctx.market_cap > 0:
+        score += 5
+
+    # 热点题材加分
+    if ctx.hot_concepts:
+        score += min(len(ctx.hot_concepts) * 5, 20)
+
+    return min(score, 100)

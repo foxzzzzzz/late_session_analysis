@@ -6,17 +6,27 @@
 
 ---
 
+{% if not stats.capital_data_available and not stats.llm_disabled %}
+## ⚠️ 重要提示：当前非交易时段或资金数据不可用
+
+> **资金流向数据为空** — 百度API仅在盘中(9:30-15:00)提供实时数据。
+> L4评分中的资金面权重已自动重新分配到尾盘强度和技术面，
+> 信号可靠性低于实盘。建议在交易时段重新运行。
+
+---
+
+{% endif %}
 {% if stats.llm_fallback_count > 0 or stats.llm_disabled %}
-## ⚠️ 重要提示：LLM分析未完全生效
+## ⚠️ LLM分析提示
 
 {% if stats.llm_disabled %}
 > **LLM功能已禁用** — 本报告所有推荐**仅基于规则评分引擎**生成，
-> 未经过AI模型综合研判。建议结合人工判断使用，降低仓位。
+> 未经过AI模型综合研判。
 {% else %}
-> **{{ stats.llm_fallback_count }}/{{ stats.llm_total }} 只标的的LLM分析降级为规则评分**
-> (原因：API超时/调用失败)。
-> 标记为 `[规则]` 的标的**未经过AI模型验证**，信号可靠性降低，
-> 建议优先关注未降级的标的，或降低降级标的的仓位。
+> **{{ stats.llm_api_success }}/{{ stats.llm_total }} 只API调用成功**
+> ({{ stats.llm_buy_signals }} 只LLM建议买入)
+> {% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只超时降级为规则评分{% endif %}。
+> 标记为 `[规则]` 的标的**未经过AI模型验证**，信号可靠性降低。
 {% endif %}
 
 ---
@@ -78,5 +88,18 @@
 {% if stats.llm_disabled %}
 **LLM分析**: 未启用 (纯规则评分模式)
 {% else %}
-**LLM分析**: {{ stats.llm_success }}/{{ stats.llm_total }} 成功{% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只降级为规则评分{% endif %}
+**LLM分析**: {{ stats.llm_api_success }}/{{ stats.llm_total }} API调用成功，{{ stats.llm_buy_signals }} 只建议买入{% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只超时降级{% endif %}{% if not stats.capital_data_available %} | 资金面权重已调整{% endif %}
+{% endif %}
+
+{% if stats.northbound_available %}
+**北向资金**: 净买入 {{ "%.1f"|format(stats.northbound_today_net) }}亿 | 趋势分 {{ "%.0f"|format(stats.northbound_trend) }} | 情绪: {{ stats.northbound_label }}
+{% else %}
+**北向资金**: 数据不可用 (非交易时段)
+{% endif %}
+
+{% if stats.concept_total > 0 %}
+**题材热度**: {{ stats.concept_total }} 个活跃题材 | {{ stats.concept_occurrences }} 次标签匹配
+{% if stats.concept_top5 %}
+- 热门题材 Top5: {% for c in stats.concept_top5 %}{{ c[0] }}({{ c[1] }}){% if not loop.last %}, {% endif %}{% endfor %}
+{% endif %}
 {% endif %}

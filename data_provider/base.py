@@ -31,7 +31,11 @@ class RealtimeQuote:
     limit_up: float = 0.0      # 涨停价
     limit_down: float = 0.0    # 跌停价
     sector: str = ""           # 所属板块
-    market_cap: float = 0.0    # 总市值
+    market_cap: float = 0.0    # 总市值(亿)
+    pe_ttm: float = 0.0        # 市盈率(TTM)
+    pb: float = 0.0            # 市净率
+    vol_ratio: float = 0.0     # 量比
+    amplitude: float = 0.0     # 振幅%
 
 
 class BaseFetcher(ABC):

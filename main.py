@@ -124,24 +124,67 @@ def main():
 
     pipeline = LateSessionPipeline(config)
 
-    if args.dry_run:
-        logger.info("Dry-run: 拉取数据...")
+    try:
+        if args.dry_run:
+            _run_dry_run(pipeline)
+            return
+
+        path = pipeline.run(stages=stages)
+        logger.info(f"报告路径: {path}")
+
+        # 打印摘要
+        print("\n" + "=" * 60)
+        print("尾盘分析完成!")
+        print(f"报告: {path}")
+        print("=" * 60)
+
+    except RuntimeError as e:
+        logger.error(f"运行失败: {e}")
+        _print_troubleshooting_guide()
+        sys.exit(1)
+
+
+def _run_dry_run(pipeline):
+    """仅拉取数据并显示摘要"""
+    logger.info("Dry-run: 拉取数据...")
+    try:
         quotes = pipeline.fetcher_mgr.fetch_snapshot()
         logger.info(f"拉取 {len(quotes)} 只股票")
-        # 显示前10只
         for q in quotes[:10]:
             logger.info(f"  {q.code} {q.name}: {q.price:.2f} ({q.change_pct:+.2f}%) "
                         f"成交额{q.turnover/1e8:.2f}亿 换手{q.turnover_rate:.1f}%")
-        return
+    except RuntimeError as e:
+        logger.error(f"数据拉取失败: {e}")
+        _print_troubleshooting_guide()
+        sys.exit(1)
 
-    path = pipeline.run(stages=stages)
-    logger.info(f"报告路径: {path}")
 
-    # 打印摘要
-    print("\n" + "=" * 60)
-    print("尾盘分析完成!")
-    print(f"报告: {path}")
-    print("=" * 60)
+def _print_troubleshooting_guide():
+    """打印问题排查指南"""
+    print("""
+╔══════════════════════════════════════════════════════════╗
+║  数据源连接失败 — 排查指南                               ║
+╠══════════════════════════════════════════════════════════╣
+║  降级链: sector_based → sina → efinance → akshare        ║
+║  - sector_based: 按板块拉取(eastmoney),盘中优先           ║
+║  - sina: 全市场(新浪财经),独立于eastmoney,24/7可用        ║
+║  - efinance/akshare: eastmoney备选                       ║
+║                                                          ║
+║  1. 交易时段: eastmoney实时API仅在9:30-15:00响应          ║
+║     盘后测试会自动切换到sina源(收盘数据)                  ║
+║                                                          ║
+║  2. 网络连通性: sina使用新浪财经,不受eastmoney限制        ║
+║     如果sina也失败,检查是否能正常访问外网                  ║
+║                                                          ║
+║  3. 调整优先级: 在 .env 中设置                            ║
+║     DATA_PROVIDER_PRIORITY=sector_based,sina,efinance,... ║
+║     盘中想跳过板块直接用sina: DATA_PROVIDER_PRIORITY=sina ║
+║                                                          ║
+║  4. 测试数据拉取: 用 --dry-run 仅测试连接                 ║
+║     python main.py --test --dry-run                      ║
+╚══════════════════════════════════════════════════════════╝
+""")
+
 
 
 def run_schedule(config: SystemConfig, stages: list[int] = None):

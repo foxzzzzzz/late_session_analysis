@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class ParallelLLMRunner:
     """并行LLM调用调度器"""
 
-    def __init__(self, client: LLMClient, max_workers: int = 30, timeout_per_stock: float = 15.0):
+    def __init__(self, client: LLMClient, max_workers: int = 8, timeout_per_stock: float = 30.0):
         self.client = client
         self.max_workers = max_workers
         self.timeout_per_stock = timeout_per_stock
@@ -42,13 +42,18 @@ class ParallelLLMRunner:
         success_count = 0
         fail_count = 0
 
-        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(contexts))) as executor:
+        n_stocks = len(contexts)
+        n_workers = min(self.max_workers, n_stocks)
+        # 总超时 = 单只超时 × (总股票数/并发数) + 缓冲
+        total_timeout = self.timeout_per_stock * (n_stocks / n_workers) + 30
+
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
             futures = {
                 executor.submit(self._analyze_one, ctx): ctx.code
                 for ctx in contexts
             }
 
-            for future in as_completed(futures, timeout=self.timeout_per_stock + 5):
+            for future in as_completed(futures, timeout=total_timeout):
                 code = futures[future]
                 try:
                     result = future.result(timeout=self.timeout_per_stock)

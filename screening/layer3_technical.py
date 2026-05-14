@@ -51,12 +51,12 @@ def screen_l3_technical(
 
 def _check_l3(ctx, cfg: L3Config, preloader: Optional[DataPreloader]) -> bool:
     """检查单只股票是否通过L3"""
-    # 1. 历史胜率
-    if ctx.history_win_rate < cfg.min_history_win_rate:
+    # 1. 历史胜率 (有数据时才检查)
+    if ctx.history_win_rate > 0 and ctx.history_win_rate < cfg.min_history_win_rate:
         return False
 
-    # 2. 波动率适中 (避免妖股和僵尸股)
-    if ctx.volatility > cfg.max_volatility:
+    # 2. 波动率适中 (有数据时才检查)
+    if ctx.volatility > 0 and ctx.volatility > cfg.max_volatility:
         return False
 
     # 3. 非连续涨停板 (避免情绪过热)
