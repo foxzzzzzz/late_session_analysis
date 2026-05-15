@@ -32,9 +32,9 @@ class SystemConfig:
     l1_min_price: float = 5.0
     l1_max_price: float = 100.0
 
-    l2_volume_ratio: float = 1.5
-    l2_last5min_vol_pct: float = 8.0
-    l2_late_rally_pct: float = 2.0
+    l2_volume_ratio: float = 2.5       # 尾盘量比(相对上午), 1.5过于宽松 → 2.5
+    l2_last5min_vol_pct: float = 12.0  # 最后5分钟量占比(%)
+    l2_late_rally_pct: float = 3.0     # 尾盘拉升最低涨幅(%)
     l2_recovery_drop: float = 3.0
     l2_recovery_rise: float = 1.5
     l2_active_buy_pct: float = 55.0
@@ -54,6 +54,7 @@ class SystemConfig:
 
     # === 百度资金流向 ===
     enable_capital_flow: bool = True
+    max_capital_enrich: int = 300  # S3资金流向富化上限，控制API调用量和时效性
 
     # === 北向资金情绪 ===
     enable_northbound: bool = True
@@ -101,6 +102,8 @@ class SystemConfig:
         self.l2_last5min_vol_pct = float(os.getenv("L2_LAST5MIN_VOLUME_PCT", str(self.l2_last5min_vol_pct)))
         self.l2_late_rally_pct = float(os.getenv("L2_LATE_RALLY_PCT", str(self.l2_late_rally_pct)))
         self.l2_active_buy_pct = float(os.getenv("L2_ACTIVE_BUY_PCT", str(self.l2_active_buy_pct)))
+        self.l2_recovery_drop = float(os.getenv("L2_LATE_RECOVERY_DROP", str(self.l2_recovery_drop)))
+        self.l2_recovery_rise = float(os.getenv("L2_LATE_RECOVERY_RISE", str(self.l2_recovery_rise)))
 
         self.l3_sector_rank_top_pct = float(os.getenv("L3_SECTOR_RANK_TOP", str(self.l3_sector_rank_top_pct)))
         self.l3_min_history_win = float(os.getenv("L3_HISTORY_WIN_RATE", str(self.l3_min_history_win)))
@@ -110,6 +113,7 @@ class SystemConfig:
             self.report_output_dir = report_dir
 
         self.enable_northbound = os.getenv("ENABLE_NORTHBOUND", "true").lower() != "false"
+        self.max_capital_enrich = int(os.getenv("MAX_CAPITAL_ENRICH", str(self.max_capital_enrich)))
 
     def need_llm(self) -> bool:
         """是否配置了LLM"""

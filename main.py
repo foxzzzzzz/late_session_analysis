@@ -103,10 +103,11 @@ def main():
         os.environ['LLM_API_KEY'] = ''
         config.llm_api_key = ''
 
-    # 解析阶段
+    # 解析阶段 (--stages N 自动包含前置阶段 1..N)
     stages = None
     if args.stages:
-        stages = [int(s.strip()) for s in args.stages.split(',')]
+        max_stage = max(int(s.strip()) for s in args.stages.split(','))
+        stages = list(range(1, max_stage + 1))
 
     # 调度模式
     if args.schedule:

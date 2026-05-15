@@ -29,12 +29,14 @@ def _cache_path() -> Path:
 
 
 def _load_history(n: int = 20) -> pd.DataFrame:
-    """读取最近 N 天北向历史"""
+    """读取最近 N 天北向历史 (排除当日，避免和实时数据重复)"""
     path = _cache_path()
     if not path.exists():
         return pd.DataFrame()
     try:
         df = pd.read_csv(path)
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        df = df[df["date"] != today_str]
         return df.tail(n)
     except Exception:
         return pd.DataFrame()
@@ -111,19 +113,22 @@ def fetch_northbound_realtime() -> Optional[dict]:
         # 趋势分数: 正值天数占比 + 累计净额趋势
         trend_score = _calc_trend_score(recent_values + [today_net])
 
-        # 仅在收盘后缓存 (最后数据点时间=15:00 或当前>15:05)
+        # 仅在当日收盘后缓存 (15:00后且当前时间在交易时段之后)
+        # 避免把前一交易日数据错误写入当前日期
+        now = datetime.now()
         should_cache = False
         if times:
             last_time = times[-1]
             if isinstance(last_time, str) and last_time.strip() == "15:00":
-                should_cache = True
-        if not should_cache:
-            now = datetime.now()
-            if now.hour > 15 or (now.hour == 15 and now.minute >= 5):
-                should_cache = True
+                # 最后数据点是15:00 → 当日已收盘，但仅在15:00后缓存
+                # (排除盘前拿到前一交易日收盘数据的情况)
+                if now.hour >= 15:
+                    should_cache = True
+        if not should_cache and (now.hour > 15 or (now.hour == 15 and now.minute >= 5)):
+            should_cache = True
 
         if should_cache:
-            today_str = datetime.now().strftime("%Y-%m-%d")
+            today_str = now.strftime("%Y-%m-%d")
             _save_snapshot(today_str, today_hgt, today_sgt)
 
         return {

@@ -58,13 +58,16 @@ class LateSessionPipeline:
         # 初始化资金流向 (东方财富替代百度)
         self.baidu_flow: Optional[EastmoneyFlowFetcher] = None
         if config.enable_capital_flow:
-            self.baidu_flow = EastmoneyFlowFetcher(timeout=15.0)
+            self.baidu_flow = EastmoneyFlowFetcher(timeout=15.0, max_workers=2)
 
         # 初始化题材分析器
         self.concept_analyzer = get_concept_analyzer()
 
         # 北向资金情绪 (S3阶段获取)
         self.northbound_sentiment: Optional[dict] = None
+
+        # 资金流向数据日期 (today/yesterday/none)
+        self.capital_data_date: str = "none"
 
         # 初始化LLM (如果配置了)
         self.llm_client: Optional[LLMClient] = None
@@ -181,23 +184,27 @@ class LateSessionPipeline:
         return contexts
 
     def _enrich_contexts(self, contexts: list[StockContext]):
-        """用快照/预加载数据增强StockContext"""
+        """用快照/预加载数据增强StockContext
+
+        注意: 近似值必须保守，避免在活跃交易时段让过多股票通过 L2。
+        主要数据源(Tencent)提供的是全天数据，不能当作尾盘数据使用。
+        """
         for ctx in contexts:
-            # 用量比近似午后量比 (vol_ratio > 1 表示今日量大于近期均量)
-            if ctx.vol_ratio > 0 and ctx.afternoon_volume_ratio == 0:
-                ctx.afternoon_volume_ratio = ctx.vol_ratio
+            # 午后量比: 仅当全天量比 >= 3.0 时才近似，且午后通常低于全天(×0.7)
+            if ctx.vol_ratio >= 3.0 and ctx.afternoon_volume_ratio == 0:
+                ctx.afternoon_volume_ratio = ctx.vol_ratio * 0.7
 
-            # 用当日涨跌幅近似尾盘价格变动
+            # 全天涨幅的约35%归因到尾盘 (保守估计，避免L2/L4过度宽松)
             if ctx.late_price_change == 0 and ctx.change_pct != 0:
-                ctx.late_price_change = abs(ctx.change_pct)
+                ctx.late_price_change = abs(ctx.change_pct) * 0.35
 
-            # 接近日内新高视为突破
-            if ctx.high > 0 and ctx.price >= ctx.high * 0.98:
+            # 接近日内新高视为突破 (1%以内)
+            if ctx.high > 0 and ctx.price >= ctx.high * 0.99:
                 ctx.broke_high = True
 
-            # 量比>1.5 设置量占比
-            if ctx.vol_ratio >= 1.5 and ctx.last_5min_volume_pct == 0:
-                ctx.last_5min_volume_pct = max(ctx.vol_ratio * 5, 8.0)
+            # 尾盘量占比: 仅当量比足够高时才近似
+            if ctx.vol_ratio >= 3.0 and ctx.last_5min_volume_pct == 0:
+                ctx.last_5min_volume_pct = min(ctx.vol_ratio * 4, 15.0)
 
             # 用振幅近似波动率
             if ctx.volatility == 0 and ctx.amplitude > 0:
@@ -256,12 +263,27 @@ class LateSessionPipeline:
         self.funnel.stats['l3_count'] = len(l3_passed)
         logger.info(f"L3 通过: {len(l3_passed)} 只")
 
-        # 百度资金流向富化 (L3通过仅30-50只, API调用量可控)
+        # 资金流向富化 (东方财富: push2his今日 → push2昨日降级)
         if self.baidu_flow and l3_passed:
-            logger.info(f"百度资金流向: 富化 {len(l3_passed)} 只 L3 通过股...")
-            codes = [c.code for c in l3_passed]
+            # 按活跃度排序，仅对前N只做资金流向富化 (控制API调用量)
+            enrich_limit = self.config.max_capital_enrich
+            l3_passed.sort(
+                key=lambda c: abs(c.change_pct) * c.vol_ratio * c.turnover,
+                reverse=True,
+            )
+            enrich_candidates = l3_passed[:enrich_limit]
+            if len(l3_passed) > enrich_limit:
+                logger.info(
+                    f"资金流向: L3通过 {len(l3_passed)} 只, "
+                    f"仅对前 {enrich_limit} 只做资金富化 (按活跃度排序)"
+                )
+            logger.info(f"资金流向: 富化 {len(enrich_candidates)} 只 L3 通过股...")
+            codes = [c.code for c in enrich_candidates]
             flow_data = self.baidu_flow.enrich_batch(codes)
-            for ctx in l3_passed:
+            today_count = 0
+            yesterday_count = 0
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            for ctx in enrich_candidates:
                 fd = flow_data.get(ctx.code, {})
                 if fd:
                     ctx.big_order_net = fd.get("mainForce", 0) * 10000
@@ -270,7 +292,21 @@ class LateSessionPipeline:
                         if ctx.turnover > 0 else 0
                     )
                     ctx.active_buy_ratio = fd.get("active_buy_ratio", 50.0)
-            logger.info(f"百度资金流向: 获得 {len(flow_data)} 只有效数据")
+                    dd = fd.get("data_date", "")
+                    if dd == today_str:
+                        today_count += 1
+                    elif dd:
+                        yesterday_count += 1
+
+            self.capital_data_date = "today" if today_count > 0 else (
+                "yesterday" if yesterday_count > 0 else "none"
+            )
+            date_label = (
+                f"今日 {today_count} 只" if today_count
+                else f"昨日(降级) {yesterday_count} 只" if yesterday_count
+                else "无数据"
+            )
+            logger.info(f"资金流向: 获得 {len(flow_data)} 只有效数据 ({date_label})")
 
         # 北向资金情绪 (S3阶段获取，非交易时段降级为空)
         self.northbound_sentiment = {"available": False}
@@ -348,6 +384,7 @@ class LateSessionPipeline:
             'llm_buy_signals': getattr(self.tracker, 'llm_buy_signals', 0),
             'llm_disabled': self.llm_client is None,
             'capital_data_available': any(c.big_order_net != 0 for c in top30),
+            'capital_data_date': self.capital_data_date,  # today/yesterday/none
             # P2: 北向资金 + 题材热度
             'northbound_available': nb_data.get("available", False),
             'northbound_today_net': nb_data.get("today_net_yi", 0),
