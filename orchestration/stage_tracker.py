@@ -30,9 +30,9 @@ class StageInfo:
 
 
 class StageTracker:
-    """4阶段时间线和状态追踪"""
+    """7阶段时间线和状态追踪"""
 
-    STAGES = ["S1_扫描", "S2_加速", "S3_验证", "S4_冲刺"]
+    STAGES = ["S0_板块预筛选", "S1_K线扫描", "S2_尾盘异常", "S3_均线验证", "S4_评分冲刺"]
 
     def __init__(self):
         self.stages: dict[str, StageInfo] = {s: StageInfo(s) for s in self.STAGES}
@@ -40,6 +40,11 @@ class StageTracker:
         self.pipeline_end: float = 0.0
         self.llm_success: int = 0
         self.llm_total: int = 0
+
+    def _ensure_stage(self, stage: str):
+        """动态创建未预定义的阶段"""
+        if stage not in self.stages:
+            self.stages[stage] = StageInfo(stage)
 
     def start(self):
         """开始整个流水线"""
@@ -49,6 +54,7 @@ class StageTracker:
 
     def stage_start(self, stage: str, input_count: int):
         """某阶段开始"""
+        self._ensure_stage(stage)
         s = self.stages[stage]
         s.start_time = time.time()
         s.input_count = input_count
@@ -56,6 +62,7 @@ class StageTracker:
 
     def stage_end(self, stage: str, output_count: int, error: str = ""):
         """某阶段结束"""
+        self._ensure_stage(stage)
         s = self.stages[stage]
         s.end_time = time.time()
         s.output_count = output_count

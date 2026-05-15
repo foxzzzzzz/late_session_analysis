@@ -41,6 +41,19 @@ class DataFetcherManager:
                 continue
         raise RuntimeError("所有数据源均拉取失败")
 
+    def fetch_codes(self, codes: list[str]) -> list[RealtimeQuote]:
+        """按指定代码列表拉取行情，不支持时降级到全量拉取+本地过滤"""
+        if hasattr(self.active_fetcher, 'fetch_codes'):
+            try:
+                quotes = self.active_fetcher.fetch_codes(codes)
+                if quotes:
+                    return quotes
+            except Exception as e:
+                logger.warning(f"fetch_codes 失败: {e}")
+        all_quotes = self.fetch_snapshot()
+        code_set = set(str(c).zfill(6) for c in codes)
+        return [q for q in all_quotes if q.code in code_set]
+
     def fetch_depth(self, codes: list[str]) -> dict[str, dict]:
         """拉取盘口深度，失败返回空"""
         try:

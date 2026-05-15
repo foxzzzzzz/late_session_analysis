@@ -56,6 +56,9 @@ class StockContext:
     anomaly_type: str = ""              # 异动类型: rally/steady/breakout
     l2_passed: Optional[bool] = None
 
+    # === S1 K线形态 ===
+    kline_passed: Optional[bool] = None
+
     # === L3: 技术面 ===
     ma5: float = 0.0
     ma10: float = 0.0

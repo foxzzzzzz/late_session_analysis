@@ -59,9 +59,26 @@ class SystemConfig:
     # === 北向资金情绪 ===
     enable_northbound: bool = True
 
+    # === S0 板块预筛选 ===
+    s0_top_n: int = 3
+    s0_max_n: int = 5
+    s0_min_stocks: int = 200
+
+    # === S1 K线形态预筛选 ===
+    kline_min_atr_pct: float = 2.0        # 波动率最低(%): ATR/Close ≥ 2%
+    kline_max_consecutive_up: int = 5      # 最多连涨天数
+    kline_min_yang_body_pct: float = 1.0   # 阳线实体最低涨幅(%)
+    kline_min_breakthrough_pct: float = 1.0  # 突破确认: 收盘距前高 ≤ 1%
+
+    # === 时间循环间隔 (秒) ===
+    s1_loop_interval: int = 180   # S1 K线扫描: 每3分钟
+    s2_loop_interval: int = 60    # S2 尾盘异常: 每1分钟
+    s3_loop_interval: int = 30    # S3 均线验证: 每30秒
+    s4_loop_interval: int = 10    # S4 融合评分: 每10秒
+
     # === 调度 ===
     schedule_enabled: bool = False
-    schedule_time: str = "14:29"
+    schedule_time: str = "14:25"
 
     def __post_init__(self):
         self._load_from_env()
@@ -115,6 +132,22 @@ class SystemConfig:
         self.enable_northbound = os.getenv("ENABLE_NORTHBOUND", "true").lower() != "false"
         self.max_capital_enrich = int(os.getenv("MAX_CAPITAL_ENRICH", str(self.max_capital_enrich)))
 
+        # S0
+        self.s0_top_n = int(os.getenv("S0_TOP_N", str(self.s0_top_n)))
+        self.s0_max_n = int(os.getenv("S0_MAX_N", str(self.s0_max_n)))
+        self.s0_min_stocks = int(os.getenv("S0_MIN_STOCKS", str(self.s0_min_stocks)))
+
+        # S1 K线
+        self.kline_min_atr_pct = float(os.getenv("KLINE_MIN_ATR_PCT", str(self.kline_min_atr_pct)))
+        self.kline_max_consecutive_up = int(os.getenv("KLINE_MAX_CONSECUTIVE_UP", str(self.kline_max_consecutive_up)))
+        self.kline_min_yang_body_pct = float(os.getenv("KLINE_MIN_YANG_BODY_PCT", str(self.kline_min_yang_body_pct)))
+
+        # 时间循环
+        self.s1_loop_interval = int(os.getenv("S1_LOOP_INTERVAL", str(self.s1_loop_interval)))
+        self.s2_loop_interval = int(os.getenv("S2_LOOP_INTERVAL", str(self.s2_loop_interval)))
+        self.s3_loop_interval = int(os.getenv("S3_LOOP_INTERVAL", str(self.s3_loop_interval)))
+        self.s4_loop_interval = int(os.getenv("S4_LOOP_INTERVAL", str(self.s4_loop_interval)))
+
     def need_llm(self) -> bool:
         """是否配置了LLM"""
         return bool(self.llm_api_key)
@@ -125,6 +158,7 @@ class SystemConfig:
         from screening.layer2_anomaly import L2Config
         from screening.layer3_technical import L3Config
         from screening.layer4_scoring import L4Config
+        from screening.layer_kline import KlineConfig
 
         return {
             'l1': L1Config(
@@ -132,6 +166,11 @@ class SystemConfig:
                 min_turnover_rate=self.l1_min_turnover_rate,
                 min_price=self.l1_min_price,
                 max_price=self.l1_max_price,
+            ),
+            'kline': KlineConfig(
+                min_atr_pct=self.kline_min_atr_pct,
+                max_consecutive_up=self.kline_max_consecutive_up,
+                min_yang_body_pct=self.kline_min_yang_body_pct,
             ),
             'l2': L2Config(
                 volume_ratio_min=self.l2_volume_ratio,

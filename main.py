@@ -74,17 +74,15 @@ def parse_args():
 
 
 def check_trading_time() -> bool:
-    """检查是否在交易时段内 (14:30-15:00)"""
+    """检查是否在交易时段内 (14:25-15:05)"""
     now = datetime.now()
     hour, minute = now.hour, now.minute
     # 周一到周五
     if now.weekday() >= 5:
         logger.warning("今日非交易日(周末)")
         return False
-    # 14:30-15:05 视为有效时段
+    # 14:25-15:05 视为有效时段
     if hour == 14 and minute >= 25:
-        return True
-    if hour == 14:
         return True
     if hour == 15 and minute <= 5:
         return True
@@ -103,11 +101,10 @@ def main():
         os.environ['LLM_API_KEY'] = ''
         config.llm_api_key = ''
 
-    # 解析阶段 (--stages N 自动包含前置阶段 1..N)
+    # 解析阶段 (--stages 0,1,2,3,4 逗号分隔)
     stages = None
     if args.stages:
-        max_stage = max(int(s.strip()) for s in args.stages.split(','))
-        stages = list(range(1, max_stage + 1))
+        stages = [int(s.strip()) for s in args.stages.split(',')]
 
     # 调度模式
     if args.schedule:
@@ -123,7 +120,7 @@ def main():
     if is_test:
         logger.info(">>> 快速测试模式 <<<")
 
-    pipeline = LateSessionPipeline(config)
+    pipeline = LateSessionPipeline(config, test_mode=is_test)
 
     try:
         if args.dry_run:
@@ -209,7 +206,7 @@ def _scheduled_run(config: SystemConfig, stages: list[int] = None):
     """调度触发的执行"""
     logger.info(">>> 定时触发: 开始尾盘分析 <<<")
     try:
-        pipeline = LateSessionPipeline(config)
+        pipeline = LateSessionPipeline(config, test_mode=False)
         path = pipeline.run(stages=stages)
         logger.info(f"报告: {path}")
     except Exception as e:

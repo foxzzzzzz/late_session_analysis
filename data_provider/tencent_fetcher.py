@@ -140,6 +140,30 @@ class TencentFetcher(BaseFetcher):
 
         return results
 
+    def fetch_codes(self, codes: list[str]) -> list[RealtimeQuote]:
+        """按指定代码列表拉取行情，跳过全市场股票列表获取"""
+        t0 = time.time()
+        all_codes = [str(c).zfill(6) for c in codes]
+        all_codes = list(dict.fromkeys(all_codes))
+
+        seen: dict[str, RealtimeQuote] = {}
+        batch_size = 50
+        total_batches = (len(all_codes) + batch_size - 1) // batch_size
+
+        for i in range(0, len(all_codes), batch_size):
+            batch = all_codes[i:i + batch_size]
+            for q in self._fetch_batch(batch):
+                if q.code not in seen:
+                    seen[q.code] = q
+            if i + batch_size < len(all_codes):
+                time.sleep(0.15)
+
+        elapsed = time.time() - t0
+        logger.info(
+            f"腾讯API(fetch_codes): {len(seen)}/{len(codes)}只 ({elapsed:.1f}s)"
+        )
+        return list(seen.values())
+
     def fetch_depth(self, codes: list[str]) -> dict[str, dict]:
         return {}
 
