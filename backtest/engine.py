@@ -40,20 +40,21 @@ class BacktestEngine:
             max_price=self.config.l1_max_price,
         )
         self.l2_config = L2Config(
-            volume_ratio_min=self.config.l2_volume_ratio_min,
-            last_5min_vol_pct_min=self.config.l2_last_5min_vol_pct_min,
-            late_rally_min=self.config.l2_late_rally_min,
-            recovery_drop_min=self.config.l2_late_recovery_drop,
-            recovery_rise_min=self.config.l2_late_recovery_rise,
-            active_buy_ratio_min=self.config.l2_active_buy_ratio_min,
+            volume_ratio_min=self.config.l2_volume_ratio,
+            last_5min_vol_pct_min=self.config.l2_last5min_vol_pct,
+            late_rally_min=self.config.l2_late_rally_pct,
+            recovery_drop_min=self.config.l2_recovery_drop,
+            recovery_rise_min=self.config.l2_recovery_rise,
+            active_buy_ratio_min=self.config.l2_active_buy_pct,
             require_capital=False,
             require_orderbook=False,
         )
         self.l3_config = L3Config(
             require_above_ma=False,
-            min_history_win_rate=self.config.l3_min_history_win_rate,
-            max_volatility=self.config.l3_max_volatility,
-            max_consecutive_limits=self.config.l3_max_consecutive_limits,
+            min_history_win_rate=self.config.l3_min_history_win,
+            max_volatility=getattr(self.config, 'l3_max_volatility', 50.0),
+            max_consecutive_limits=getattr(self.config, 'l3_max_consecutive_limits', 1),
+            sector_rank_top_pct=self.config.l3_sector_rank_top_pct,
         )
         self.l4_config = L4Config()
         self.kline_config = KlineConfig(
@@ -316,8 +317,13 @@ class BacktestEngine:
         sorted_ctx = sorted(scored, key=lambda c: c.total_score, reverse=True)
         top30 = sorted_ctx[:self.l4_config.max_total_output]
 
-        # 融合排序 (纯规则，rule_weight=1.0)
-        merge_and_rank(top30, llm_results={}, rule_weight=1.0)
+        # 融合排序 (纯规则，rule_weight=1.0, 回测专用阈值)
+        merge_and_rank(
+            top30, llm_results={}, rule_weight=1.0,
+            strong_buy_threshold=self.config.l4_strong_buy,
+            buy_threshold=self.config.l4_buy,
+            watch_threshold=self.config.l4_watch,
+        )
 
         return top30
 

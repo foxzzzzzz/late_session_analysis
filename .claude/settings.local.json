@@ -5,7 +5,8 @@
       "Read(//d/cc/daily_stock_analysis/**)",
       "Read(//mnt/d/cc/**)",
       "Bash(find /d -maxdepth 2 -type d -name \"daily_stock_analysis\")",
-      "WebSearch"
+      "WebSearch",
+      "Bash(pip install *)"
     ]
   }
 }

@@ -22,7 +22,10 @@ class BacktestDataLoader:
     # ============================================================
 
     def load_sector_constituents(self, sectors: list[str]) -> dict[str, list[str]]:
-        """获取各板块成分股代码列表，优先从缓存读取"""
+        """获取各板块成分股代码列表，优先从缓存读取
+
+        数据源优先级: 缓存JSON → akshare API → baostock近似匹配 → 空列表
+        """
         cache_file = os.path.join(self.cache_dir, "sector_constituents.json")
         if not self.config.no_cache and os.path.exists(cache_file):
             with open(cache_file, "r") as f:
@@ -31,6 +34,44 @@ class BacktestDataLoader:
                 logger.info(f"板块成分股(缓存): {sum(len(v) for v in cached.values())} 只 ({len(cached)} 板块)")
                 return cached
 
+        # 尝试 akshare (仅交易时段可用)
+        result = self._load_sectors_via_akshare(sectors)
+        failed_sectors = [s for s in sectors if not result.get(s)]
+
+        # baostock 降级: 对失败的板块用名称近似匹配
+        if failed_sectors:
+            logger.info(f"akshare未获取到板块: {failed_sectors}, 尝试baostock降级...")
+            bs_result = self._load_sectors_via_baostock(failed_sectors)
+            for sector, codes in bs_result.items():
+                if codes:
+                    result[sector] = codes
+                    logger.info(f"板块 {sector}(baostock): {len(codes)} 只")
+
+        # 仍然失败的板块
+        still_failed = [s for s in sectors if not result.get(s)]
+        if still_failed:
+            logger.warning(
+                f"以下板块无法获取成分股: {still_failed}。"
+                f"建议在交易日运行一次以填充缓存: python -c \"from backtest.data_loader import BacktestDataLoader; "
+                f"from backtest.config import BacktestConfig; BacktestDataLoader(BacktestConfig()).load_sector_constituents("
+                f"{sectors})\" "
+            )
+            for s in still_failed:
+                if s not in result:
+                    result[s] = []
+
+        if not self.config.no_cache and any(result.values()):
+            with open(cache_file, "w") as f:
+                json.dump(result, f, ensure_ascii=False)
+
+        total_codes = set()
+        for codes in result.values():
+            total_codes.update(codes)
+        logger.info(f"板块成分股: {sum(len(v) for v in result.values())} 只(含重复), {len(total_codes)} 只(去重)")
+        return result
+
+    def _load_sectors_via_akshare(self, sectors: list[str]) -> dict[str, list[str]]:
+        """通过 akshare 获取板块成分股"""
         import akshare as ak
         result = {}
         for sector in sectors:
@@ -48,26 +89,74 @@ class BacktestDataLoader:
                     logger.warning(f"板块 {sector} 第{attempt+1}次失败: {e}, {delay:.1f}s后重试")
                     time.sleep(delay)
             else:
-                logger.warning(f"板块 {sector}: 3次重试均失败，使用空列表")
+                logger.warning(f"板块 {sector}: akshare 3次重试均失败")
                 result[sector] = []
-
-        if not self.config.no_cache:
-            with open(cache_file, "w") as f:
-                json.dump(result, f, ensure_ascii=False)
-
-        total_codes = set()
-        for codes in result.values():
-            total_codes.update(codes)
-        logger.info(f"板块成分股: {sum(len(v) for v in result.values())} 只(含重复), {len(total_codes)} 只(去重)")
         return result
+
+    def _load_sectors_via_baostock(self, sectors: list[str]) -> dict[str, list[str]]:
+        """通过 baostock 股票名称关键词近似匹配板块成分股（慢，一次性降级）"""
+        import baostock as bs
+        logger.info("baostock降级: 正在获取全量股票列表用于板块名称匹配 (约需30-60秒)...")
+        try:
+            bs.login()
+            rs = bs.query_stock_basic()
+            if rs.error_code != "0":
+                logger.warning(f"baostock query_stock_basic失败: {rs.error_msg}")
+                return {s: [] for s in sectors}
+
+            # 遍历全量股票，按名称关键词匹配板块
+            sector_keywords = {
+                "半导体": ["半导", "芯片", "集成"],
+                "电子元件": ["电子", "元件", "PCB", "电路"],
+                "通信设备": ["通信", "通讯", "网络", "电信", "5G"],
+                "汽车零部件": ["汽车", "汽配", "车辆", "轮胎", "底盘"],
+                "计算机设备": ["计算机", "电脑", "服务器", "信息", "软件", "数据"],
+                "软件开发": ["软件", "开发", "程序", "系统集"],
+                "消费电子": ["消费电子", "电子"],
+                "光伏设备": ["光伏", "太阳能", "硅"],
+                "证券": ["证券", "券商"],
+            }
+
+            result = {s: [] for s in sectors}
+            t0 = time.time()
+            count = 0
+            while rs.next():
+                count += 1
+                row = rs.get_row_data()
+                if len(row) >= 2:
+                    code = row[0].replace("sh.", "").replace("sz.", "").replace("bj.", "")
+                    name = row[1] if len(row) > 1 else ""
+                    for sector in sectors:
+                        keywords = sector_keywords.get(sector, [sector[:2]])
+                        if any(kw in name for kw in keywords):
+                            result[sector].append(code)
+
+                if count % 1000 == 0:
+                    elapsed = time.time() - t0
+                    logger.info(f"  baostock扫描: {count}只, 耗时{elapsed:.0f}s")
+
+            elapsed = time.time() - t0
+            logger.info(f"baostock降级完成: {count}只扫描, 耗时{elapsed:.0f}s")
+            for sector, codes in result.items():
+                if codes:
+                    logger.info(f"  板块 {sector}: {len(codes)} 只 (名称匹配)")
+            return result
+        except Exception as e:
+            logger.warning(f"baostock降级失败: {e}")
+            return {s: [] for s in sectors}
+        finally:
+            try:
+                bs.logout()
+            except Exception:
+                pass
 
     # ============================================================
     # 日线数据
     # ============================================================
 
     def load_daily_bars(self, codes: list[str], start_date: str, end_date: str) -> dict[str, pd.DataFrame]:
-        """加载指定股票的日线数据，按股票分别缓存为parquet"""
-        import akshare as ak
+        """加载指定股票的日线数据 (baostock数据源, 24/7可用)，按股票分别缓存为parquet"""
+        import baostock as bs
 
         result = {}
         bars_dir = os.path.join(self.cache_dir, "daily_bars")
@@ -79,13 +168,11 @@ class BacktestDataLoader:
             if not self.config.no_cache and os.path.exists(cache_file):
                 try:
                     cached = pd.read_parquet(cache_file)
-                    # 检查日期范围
                     if not cached.empty:
                         cached_dates = pd.to_datetime(cached.iloc[:, 0])
                         need_start = pd.Timestamp(start_date)
                         need_end = pd.Timestamp(end_date)
                         if cached_dates.min() <= need_start and cached_dates.max() >= need_end:
-                            # 缓存覆盖所需范围
                             mask = (cached_dates >= need_start) & (cached_dates <= need_end)
                             result[code] = cached[mask].reset_index(drop=True)
                             continue
@@ -94,24 +181,66 @@ class BacktestDataLoader:
             codes_to_fetch.append(code)
 
         if codes_to_fetch:
-            logger.info(f"日线需拉取: {len(codes_to_fetch)} 只股票")
-            for i, code in enumerate(codes_to_fetch):
+            logger.info(f"日线需拉取(baostock): {len(codes_to_fetch)} 只股票")
+            start8 = str(start_date)[:8]
+            end8 = str(end_date)[:8]
+            query_start = f"{start8[:4]}-{start8[4:6]}-{start8[6:8]}"
+            query_end = f"{end8[:4]}-{end8[4:6]}-{end8[6:8]}"
+
+            bs.login()
+            try:
+                total = len(codes_to_fetch)
+                for i, code in enumerate(codes_to_fetch):
+                    try:
+                        df = self._fetch_daily_baostock(code, query_start, query_end)
+                        if df is not None and not df.empty:
+                            cache_file = os.path.join(bars_dir, f"{code}.parquet")
+                            if not self.config.no_cache:
+                                df.to_parquet(cache_file, index=False)
+                            result[code] = df
+                    except Exception as e:
+                        logger.debug(f"日线 {code} 失败: {e}")
+                    if (i + 1) % 100 == 0:
+                        logger.info(f"  日线进度: {i+1}/{total} (成功{len(result) - (len(codes_to_fetch) - i - 1)})")
+                    time.sleep(0.1)
+            finally:
                 try:
-                    df = ak.stock_zh_a_hist(symbol=code, period="daily", start_date=start_date, end_date=end_date, adjust="")
-                    if df is not None and not df.empty:
-                        # 缓存整段
-                        cache_file = os.path.join(bars_dir, f"{code}.parquet")
-                        if not self.config.no_cache:
-                            df.to_parquet(cache_file, index=False)
-                        result[code] = df
-                except Exception as e:
-                    logger.debug(f"日线 {code} 失败: {e}")
-                if (i + 1) % 100 == 0:
-                    logger.info(f"  日线进度: {i+1}/{len(codes_to_fetch)}")
-                time.sleep(0.15)
+                    bs.logout()
+                except Exception:
+                    pass
 
         logger.info(f"日线加载完成: {len(result)} 只")
         return result
+
+    def _fetch_daily_baostock(self, code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+        """使用 baostock 获取日线数据 (调用前需确保 bs.login() 已执行)"""
+        import baostock as bs
+
+        bs_code = _code_to_baostock(code)
+        rs = bs.query_history_k_data_plus(
+            bs_code,
+            "date,code,open,high,low,close,volume,amount,turn,pctChg",
+            start_date=start_date, end_date=end_date,
+            frequency="d", adjustflag="3",
+        )
+        if rs.error_code != "0":
+            logger.debug(f"baostock日线查询失败 {code}: {rs.error_msg}")
+            return None
+
+        rows = []
+        while rs.next():
+            rows.append(rs.get_row_data())
+        if not rows:
+            return None
+
+        df = pd.DataFrame(rows, columns=["date", "code", "open", "high", "low", "close", "volume", "amount", "turn", "pctChg"])
+        for col in ["open", "high", "low", "close", "volume", "amount", "turn", "pctChg"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        # 兼容 data_adapter 的中英文列名查找
+        df["change_pct"] = df["pctChg"]
+        df["turnover"] = df["amount"]
+        df["turnover_rate"] = df["turn"]
+        return df
 
     def get_daily_snapshot(self, daily_bars: dict[str, pd.DataFrame], date_str: str) -> pd.DataFrame:
         """从已加载的日线字典中提取某一天的快照"""
@@ -133,47 +262,117 @@ class BacktestDataLoader:
     # ============================================================
 
     def load_5min_bars(self, code: str, date_str: str) -> Optional[pd.DataFrame]:
-        """加载单只股票单日的5分钟K线数据"""
-        import akshare as ak
+        """加载单只股票单日的5分钟K线数据 (baostock数据源, 24/7可用)
 
+        单只调用自动处理 baostock 登录/登出。批量调用请用 load_5min_bars_batch。
+        """
+        cached = self._load_5min_with_cache(code, date_str)
+        if cached is not None:
+            return cached
+
+        import baostock as bs
+        bs.login()
+        try:
+            df = self._fetch_5min_baostock(code, date_str)
+            if df is not None and not df.empty:
+                self._save_5min_cache(code, date_str, df)
+                return df
+        except Exception as e:
+            logger.debug(f"5分钟线 {code} {date_str}: {e}")
+        finally:
+            try:
+                bs.logout()
+            except Exception:
+                pass
+
+        return None
+
+    def _fetch_5min_baostock(self, code: str, date_str: str) -> Optional[pd.DataFrame]:
+        """使用 baostock 获取单日5分钟K线 (调用前需确保 bs.login() 已执行)"""
+        import baostock as bs
+
+        bs_code = _code_to_baostock(code)
+        date8 = str(date_str)[:8]
+        query_date = f"{date8[:4]}-{date8[4:6]}-{date8[6:8]}"
+
+        rs = bs.query_history_k_data_plus(
+            bs_code,
+            "date,time,code,open,high,low,close,volume,amount",
+            start_date=query_date, end_date=query_date,
+            frequency="5", adjustflag="3",
+        )
+        if rs.error_code != "0":
+            logger.debug(f"baostock查询失败 {code} {date_str}: {rs.error_msg}")
+            return None
+
+        rows = []
+        while rs.next():
+            rows.append(rs.get_row_data())
+        if not rows:
+            return None
+
+        df = pd.DataFrame(rows, columns=["date", "time", "code", "open", "high", "low", "close", "volume", "amount"])
+        for col in ["open", "high", "low", "close", "volume", "amount"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["time"] = pd.to_datetime(df["time"].astype(str).str[:14], format="%Y%m%d%H%M%S")
+        df["turnover"] = df["amount"]
+        return df
+
+    def _load_5min_with_cache(self, code: str, date_str: str) -> Optional[pd.DataFrame]:
+        """检查5分钟线缓存，命中则返回，未命中返回 None"""
         cache_dir_5min = os.path.join(self.cache_dir, "5min_bars", str(date_str)[:8])
         os.makedirs(cache_dir_5min, exist_ok=True)
         cache_file = os.path.join(cache_dir_5min, f"{code}.parquet")
-
         if not self.config.no_cache and os.path.exists(cache_file):
             try:
                 return pd.read_parquet(cache_file)
             except Exception:
                 pass
-
-        try:
-            start = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 09:30:00"
-            end = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 15:00:00"
-            df = ak.stock_zh_a_hist_min_em(symbol=code, start_date=start, end_date=end, period="5", adjust="")
-            if df is not None and not df.empty:
-                # 标准化列名
-                cols = ["time", "open", "close", "high", "low", "chg_amt", "chg_pct", "volume", "turnover", "amplitude", "turnover_rate"]
-                df.columns = cols[:len(df.columns)]
-                df["time"] = pd.to_datetime(df["time"])
-                if not self.config.no_cache:
-                    df.to_parquet(cache_file, index=False)
-                return df
-        except Exception as e:
-            logger.debug(f"5分钟线 {code} {date_str}: {e}")
-
         return None
 
+    def _save_5min_cache(self, code: str, date_str: str, df: pd.DataFrame):
+        if self.config.no_cache:
+            return
+        cache_dir_5min = os.path.join(self.cache_dir, "5min_bars", str(date_str)[:8])
+        os.makedirs(cache_dir_5min, exist_ok=True)
+        cache_file = os.path.join(cache_dir_5min, f"{code}.parquet")
+        df.to_parquet(cache_file, index=False)
+
     def load_5min_bars_batch(self, codes: list[str], date_str: str) -> dict[str, pd.DataFrame]:
-        """批量加载某日的5分钟线"""
+        """批量加载某日的5分钟线 (baostock单次登录，避免重复login/logout)"""
+        import baostock as bs
+
+        # 先检查缓存
         result = {}
-        total = len(codes)
-        for i, code in enumerate(codes):
-            df = self.load_5min_bars(code, date_str)
-            if df is not None:
-                result[code] = df
-            if (i + 1) % 50 == 0:
-                logger.info(f"  5分钟线进度: {i+1}/{total} (成功{len(result)})")
-            time.sleep(1.0 / max(self.config.rate_limit_per_sec, 0.5))
+        codes_to_fetch = []
+        for code in codes:
+            cached = self._load_5min_with_cache(code, date_str)
+            if cached is not None:
+                result[code] = cached
+            else:
+                codes_to_fetch.append(code)
+
+        if codes_to_fetch:
+            bs.login()
+            try:
+                total = len(codes_to_fetch)
+                for i, code in enumerate(codes_to_fetch):
+                    try:
+                        df = self._fetch_5min_baostock(code, date_str)
+                        if df is not None and not df.empty:
+                            self._save_5min_cache(code, date_str, df)
+                            result[code] = df
+                    except Exception as e:
+                        logger.debug(f"5分钟线 {code} {date_str}: {e}")
+                    if (i + 1) % 50 == 0:
+                        logger.info(f"  5分钟线进度: {i+1}/{total} (成功{len(result) - len(codes_to_fetch) + i + 1})")
+                    time.sleep(0.3)
+            finally:
+                try:
+                    bs.logout()
+                except Exception:
+                    pass
+
         return result
 
     # ============================================================
@@ -225,19 +424,25 @@ class BacktestDataLoader:
     def get_trading_days(start_date: str, end_date: str) -> list[str]:
         """获取交易日列表 (YYYYMMDD)"""
         import akshare as ak
+
+        def _norm(d: str) -> str:
+            return str(d).replace("-", "").replace("/", "")[:8]
+
         try:
             df = ak.tool_trade_date_hist_sina()
             if df is not None and not df.empty:
                 date_col = df.columns[0]
                 dates = df[date_col].astype(str).tolist()
-                return [d for d in dates if start_date <= d <= end_date]
+                result = [d for d in dates if _norm(start_date) <= _norm(d) <= _norm(end_date)]
+                if result:
+                    return [_norm(d) for d in result]
         except Exception:
             pass
 
         # 降级: 生成所有日期, 排除周末
         start = pd.Timestamp(start_date)
         end = pd.Timestamp(end_date)
-        all_dates = pd.date_range(start, end, freq="B")  # business days only
+        all_dates = pd.date_range(start, end, freq="B")
         return [d.strftime("%Y%m%d") for d in all_dates]
 
 
@@ -259,8 +464,11 @@ def compute_s2_metrics(df_5min: pd.DataFrame) -> dict:
     if df_5min is None or df_5min.empty:
         return _empty_s2_metrics()
 
-    # 列名标准化
-    t_col = df_5min.columns[0]  # time
+    # 列名标准化 — 查找时间列 (baostock第1列是date, 第2列是time; akshare第1列是time)
+    if "time" in df_5min.columns:
+        t_col = "time"
+    else:
+        t_col = df_5min.columns[0]
     close_col = "close" if "close" in df_5min.columns else df_5min.columns[3]
     high_col = "high" if "high" in df_5min.columns else df_5min.columns[4]
     low_col = "low" if "low" in df_5min.columns else df_5min.columns[5]
@@ -323,6 +531,17 @@ def compute_s2_metrics(df_5min: pd.DataFrame) -> dict:
         "last_5min_vol": float(last_5min_vol),
         "late_volume": float(late_volume),
     }
+
+
+def _code_to_baostock(code: str) -> str:
+    """将纯数字代码转为 baostock 格式: 000001 → sz.000001, 600001 → sh.600001"""
+    c = str(code).zfill(6)
+    if c.startswith(("6", "9")):
+        return f"sh.{c}"
+    elif c.startswith(("4", "8")):
+        return f"bj.{c}"
+    else:
+        return f"sz.{c}"
 
 
 def _empty_s2_metrics() -> dict:

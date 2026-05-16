@@ -20,6 +20,9 @@ def merge_and_rank(
     contexts: list,
     llm_results: dict[str, dict],
     rule_weight: float = 0.7,
+    strong_buy_threshold: float = 75.0,
+    buy_threshold: float = 60.0,
+    watch_threshold: float = 45.0,
 ) -> list:
     """融合规则评分和LLM分析结果，重新排序
 
@@ -27,6 +30,9 @@ def merge_and_rank(
         contexts: StockContext列表(已通过L4评分)
         llm_results: {code: {decision, confidence, reason}}
         rule_weight: 规则评分权重 (默认0.7, LLM占0.3)
+        strong_buy_threshold: 强烈买入阈值 (实盘75, 回测可调低)
+        buy_threshold: 买入阈值 (实盘60)
+        watch_threshold: 观察阈值 (实盘45)
 
     Returns:
         按final_score降序排列的列表
@@ -63,11 +69,11 @@ def merge_and_rank(
         ctx.final_rank = i + 1
 
         # 最终建议
-        if ctx.final_score >= 75:
+        if ctx.final_score >= strong_buy_threshold:
             ctx.recommendation = 'strong_buy'
-        elif ctx.final_score >= 60:
+        elif ctx.final_score >= buy_threshold:
             ctx.recommendation = 'buy'
-        elif ctx.final_score >= 45:
+        elif ctx.final_score >= watch_threshold:
             ctx.recommendation = 'watch'
         else:
             ctx.recommendation = 'skip'
