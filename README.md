@@ -132,50 +132,6 @@ S4 融合评分 (14:57-14:58, 每10s循环)
 
 **分数等级:** >85 强烈买入 | 75-85 买入 | 60-75 观察 | <60 放弃
 
-## 项目结构
-
-```
-late_session_analysis/
-  main.py                         # CLI入口
-  data_provider/                  # 数据采集层
-    base.py                       # RealtimeQuote 数据类
-    manager.py                    # 多源降级管理器
-    tencent_fetcher.py            # 腾讯财经 (PE/PB/市值, fetch_codes)
-    sina_fetcher.py               # 新浪全市场快照
-    sector_fetcher.py             # 新浪板块扫描
-    efinance_fetcher.py           # 东方财富快照
-    akshare_fetcher.py            # AKShare快照
-    baidu_flow_fetcher.py         # 百度资金流向
-    northbound_fetcher.py         # 北向资金情绪 (同花顺hsgtApi)
-    sector_filter.py              # S0板块预筛选 (同花顺排名→成分股)
-    preloader.py                  # 静态数据预加载
-    concept_analyzer.py           # 题材热度统计
-  screening/                      # 筛选漏斗
-    context.py                    # StockContext 统一数据结构
-    funnel.py                     # 漏斗流水线 (支持K线层)
-    layer1_access.py              # L1 基础准入
-    layer2_anomaly.py             # L2 尾盘异动
-    layer3_technical.py           # L3 技术面验证
-    layer4_scoring.py             # L4 量化评分
-    layer_kline.py                # S1 K线形态预筛选 (新增)
-    cache.py                      # StockMetricsCache
-  analysis/                       # LLM + 规则评分
-    llm_client.py                 # LiteLLM 客户端
-    parallel_runner.py            # 并行LLM执行器
-    merger.py                     # LLM/规则结果融合
-    rule_scorer.py                # 规则兜底评分
-    prompts.py                    # LLM提示模板
-  report/                         # 报告
-    renderer.py                   # Jinja2渲染
-    templates/report.j2           # 主报告模板
-    templates/stock_card.j2       # 个股卡片模板
-  orchestration/                  # 编排
-    config.py                     # 系统配置 (.env → dataclass)
-    pipeline.py                   # 7阶段时间循环流水线
-    stage_tracker.py              # 阶段计时与状态追踪
-  tests/                          # 单元测试 (47个)
-```
-
 ## 配置 (`.env`)
 
 ### 数据源
@@ -240,6 +196,132 @@ pytest tests/ -v
 
 # 单文件
 pytest tests/test_layer1_access.py -v
+```
+
+## 回测系统 (Backtest)
+
+基于历史数据 + 5分钟K线精确计算的策略回测验证系统。复用实盘管线 S1→S2→S3→S4 筛选逻辑，用固定板块股票池替代全市场扫描，T+1 开盘卖出模拟。
+
+### 快速开始
+
+```bash
+# 默认日期区间 (.env 中 BT_START_DATE → BT_END_DATE)
+python main_backtest.py
+
+# 指定区间
+python main_backtest.py --start 20260401 --end 20260515
+
+# 自定义板块 + 强制刷新缓存
+python main_backtest.py --sectors 半导体,电子元件 --no-cache
+
+# 禁用5分钟线精确数据 (降级到日线近似公式)
+python main_backtest.py --no-5min
+
+# 详细日志
+python main_backtest.py -v
+```
+
+### CLI 参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--start` | 回测起始日期 YYYYMMDD | `.env` BT_START_DATE |
+| `--end` | 回测结束日期 YYYYMMDD | `.env` BT_END_DATE |
+| `--output-dir` | 报告输出目录 | `./backtest_reports` |
+| `--cache-dir` | 数据缓存目录 | `./backtest_cache` |
+| `--no-cache` | 禁用缓存，强制重新拉取 | false |
+| `--no-5min` | 禁用5分钟线，使用近似公式 | false |
+| `--capital-flow-mode` | 资金流模式: `none` / `estimated` | `none` |
+| `--sectors` | 覆盖 TARGET_SECTORS (逗号分隔) | `.env` 配置 |
+| `--max-positions` | 每日最大持仓数 | 5 |
+| `--slippage` | 滑点 (bps) | 5.0 |
+| `-v` | DEBUG 详细日志 | false |
+
+### 回测报告
+
+每次回测在 `--output-dir` 下生成时间戳命名的5个文件：
+
+| 文件 | 内容 |
+|------|------|
+| `trades_*.csv` | 逐笔交易明细 (代码/名称/买入价/卖出价/收益率/评分等) |
+| `summary_*.json` | 汇总统计 + 分层绩效 |
+| `monthly_*.csv` | 月度收益分组统计 |
+| `stratified_*.csv` | 按推荐等级 (strong_buy/buy/watch) 分层统计 |
+| `overview_*.md` | Markdown 总览 (绩效表 + 分层表) |
+
+### 与实盘管线的差异
+
+| 维度 | 实盘管线 | 回测系统 |
+|------|----------|----------|
+| 股票池 | S0 同花顺板块排名动态选取 Top 3-5 | 固定板块成分股 (~400-550只) |
+| S2 尾盘指标 | 腾讯实时量价 + 近似公式 | 5分钟线精算 (afternoon_volume_ratio, late_price_change 等) |
+| 资金流向 | S2 首轮东财 push2his | 不可用 (无历史数据) |
+| LLM 融合 | 30% 权重 | 不可用 (rule_weight=1.0) |
+| 买入价 | 实盘最新价 | 当日收盘价 + 滑点 |
+| 卖出价 | 次日实盘开盘价 | 次日开盘价 - 滑点 |
+
+### 可回测覆盖度
+
+```
+维度         策略权重    回测覆盖    说明
+尾盘强度     35%        ~27%       4项核心S2指标精确，缺大单/盘口
+技术面       25%        ~27%       异动类型100%精确
+资金面       20%         0%        无历史数据，权重归零重分配
+市场环境     15%        ~11%       板块/北向可用，题材无历史
+历史胜率      5%          0%       固定为0
+─────────────────────────────────
+总有效覆盖:  ~80%
+```
+
+核心差异化能力（S2尾盘异动检测）完整保留，回测对策略有效性有实质参考价值。
+
+### 退出逻辑
+
+```
+买入价 = 当日收盘价 × (1 + 滑点/10000)
+卖出价 = 次日开盘价 × (1 - 滑点/10000)
+收益率 = (卖出 - 买入) / 买入 - 佣金 × 2
+```
+
+### 绩效指标
+
+| 指标 | 说明 |
+|------|------|
+| 胜率 | 盈利交易占比 |
+| 平均/中位数收益率 | 单笔收益分布 |
+| 累计收益率 | 所有交易收益加总 |
+| 夏普比率 | 年化 (sqrt(252))，基于单笔收益 |
+| 最大回撤 | 累计净值曲线最大回撤 |
+| Calmar 比率 | 年化收益 / 最大回撤 |
+| 盈亏因子 | 总盈利 / 总亏损 |
+| 最长连胜/连亏 | 连续盈利/亏损笔数 |
+
+## 项目结构
+
+```
+late_session_analysis/
+  main.py                         # CLI入口 (实盘)
+  main_backtest.py                # CLI入口 (回测)
+  data_provider/                  # 数据采集层
+    ...
+  screening/                      # 筛选漏斗 (实盘+回测共用)
+    ...
+  backtest/                       # 回测模块
+    __init__.py
+    config.py                     # BacktestConfig (继承 SystemConfig)
+    data_loader.py                # 历史数据加载 + S2 精算
+    data_adapter.py               # 5分钟线 → StockContext 适配
+    engine.py                     # 逐日循环引擎 S1→S2→S3→S4
+    trade_log.py                  # Trade, DayResult, 日志
+    performance.py                # 绩效计算 (13项指标)
+    report_generator.py           # CSV/JSON/Markdown 报告
+  analysis/                       # LLM + 规则评分
+    ...
+  report/                         # 报告
+    ...
+  orchestration/                  # 编排
+    ...
+  tests/                          # 单元测试 (47个)
 ```
 
 ## 数据源说明
