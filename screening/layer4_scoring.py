@@ -51,21 +51,28 @@ class L4Config:
 def score_l4(
     contexts: list,
     config: Optional[L4Config] = None,
+    capital_data_date: str = "none",
 ) -> list:
     """L4 量化评分并排序
+
+    Args:
+        capital_data_date: "today" = 当日资金流可用, "none" = 不可用
 
     返回按 total_score 降序排列的列表
     """
     if config is None:
         config = L4Config()
 
-    # 检测资金流数据是否可用 (非交易时段百度API返回空)
-    has_capital = any(
-        ctx.big_order_net != 0 or ctx.big_order_ratio > 0
-        for ctx in contexts
+    # 仅当日资金流数据有效 (昨日数据不参与权重分配)
+    has_capital = (
+        capital_data_date == "today"
+        and any(
+            ctx.big_order_net != 0 or ctx.big_order_ratio > 0
+            for ctx in contexts
+        )
     )
 
-    # 权重: 有资金数据时capital占15%，缺失时重新分配给尾盘+技术
+    # 权重: 有当日资金数据时capital占15%，缺失时重新分配给尾盘+技术
     if has_capital:
         w_tail, w_tech, w_cap, w_env, w_hist, w_fund = 0.30, 0.20, 0.15, 0.15, 0.05, 0.15
     else:

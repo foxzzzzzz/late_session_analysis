@@ -82,7 +82,7 @@ class ParallelLLMRunner:
         prompt = make_stock_prompt(ctx)
         response = self.client.chat(SYSTEM_PROMPT, prompt)
 
-        if response is None:
+        if not response:
             return None
 
         # 解析JSON响应

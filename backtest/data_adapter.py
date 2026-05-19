@@ -42,6 +42,7 @@ class HistoricalDataAdapter:
         date_str: str,
         bars_5min: dict[str, pd.DataFrame] = None,
         pre_close_map: dict[str, float] = None,
+        daily_bars: dict[str, pd.DataFrame] = None,
     ) -> list[StockContext]:
         """将某日的日线快照 + 可选5分钟线转换为 StockContext 列表
 
@@ -50,13 +51,15 @@ class HistoricalDataAdapter:
             date_str: 日期 YYYYMMDD
             bars_5min: {code: 5分钟线DataFrame} 可选
             pre_close_map: {code: pre_close} 可选 (用于计算涨停价等)
+            daily_bars: {code: 完整日线DataFrame} 可选 (用于MA/波动率精确计算)
         """
         bars_5min = bars_5min or {}
         pre_close_map = pre_close_map or {}
+        daily_bars = daily_bars or {}
         contexts = []
 
         for _, row in daily_snapshot.iterrows():
-            ctx = self._row_to_context(row, date_str, bars_5min, pre_close_map)
+            ctx = self._row_to_context(row, date_str, bars_5min, pre_close_map, daily_bars)
             if ctx is not None:
                 contexts.append(ctx)
 
@@ -69,6 +72,7 @@ class HistoricalDataAdapter:
         date_str: str,
         bars_5min: dict[str, pd.DataFrame],
         pre_close_map: dict[str, float],
+        daily_bars: dict[str, pd.DataFrame] = None,
     ) -> Optional[StockContext]:
         """单行日线数据 → StockContext"""
         code = str(row.get("code", "")).zfill(6)
@@ -110,8 +114,8 @@ class HistoricalDataAdapter:
             low=low,
             open=open_p,
             pre_close=pre_close,
-            limit_up=round(pre_close * 1.1, 2),
-            limit_down=round(pre_close * 0.9, 2),
+            limit_up=round(pre_close * (1 + _get_limit_pct(code) / 100), 2),
+            limit_down=round(pre_close * (1 - _get_limit_pct(code) / 100), 2),
             vol_ratio=vol_ratio,
             amplitude=amplitude,
             market_cap=market_cap,
@@ -139,13 +143,19 @@ class HistoricalDataAdapter:
             if total_bars > 0:
                 ctx.avg_period_volume = s2["total_vol"] / total_bars
         else:
-            # 降级: 使用近似公式
-            _apply_approximations(ctx)
+            # 无5分钟线: S2指标留空(0)，不生成虚假信号
+            pass
 
-        # === L3 技术面近似 ===
-        ctx.ma5 = pre_close * 0.98
-        ctx.ma10 = pre_close * 0.97
-        ctx.volatility = amplitude * 5 if amplitude > 0 else 0.0
+        # === L3 技术面: 从日线历史精确计算 ===
+        df_daily = daily_bars.get(code) if daily_bars else None
+        if df_daily is not None and not df_daily.empty:
+            from data_provider.kline_provider import KlineProvider
+            ma5, ma10, ma20 = KlineProvider.compute_ma(df_daily)
+            ctx.ma5 = ma5
+            ctx.ma10 = ma10
+            ctx.ma20 = ma20
+            ctx.volatility = KlineProvider.compute_volatility(df_daily)
+        # 无日线数据时 MA/波动率保持为 0 (L3 会将其标记为数据缺失)
 
         return ctx
 
@@ -162,17 +172,11 @@ class HistoricalDataAdapter:
         return 0.0
 
 
-def _apply_approximations(ctx: StockContext):
-    """无5分钟线时的近似公式 (与 pipeline._enrich_contexts 保持一致)"""
-    if ctx.vol_ratio >= 3.0:
-        if ctx.afternoon_volume_ratio == 0:
-            ctx.afternoon_volume_ratio = ctx.vol_ratio * 0.7
-        if ctx.last_5min_volume_pct == 0:
-            ctx.last_5min_volume_pct = min(ctx.vol_ratio * 4, 15.0)
-
-    if ctx.late_price_change == 0 and ctx.change_pct != 0:
-        ctx.late_price_change = abs(ctx.change_pct) * 0.35
-
-    ctx.broke_high = ctx.price >= ctx.high * 0.99
-    ctx.intraday_high = ctx.high
-    ctx.price_at_1430 = ctx.open
+def _get_limit_pct(code: str) -> float:
+    """根据股票代码判断涨跌停幅度: 主板10%, 科创板20%, 北交所30%"""
+    code = str(code).zfill(6)
+    if code.startswith("68"):   # 科创板
+        return 20.0
+    if code.startswith(("4", "8")):  # 北交所
+        return 30.0
+    return 10.0  # 主板/创业板

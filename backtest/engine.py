@@ -232,7 +232,8 @@ class BacktestEngine:
             self.config, self.sector_map, sector_perf={}, northbound={}
         )
         contexts = adapter.adapt_single_day(snapshot, date_str, bars_5min=None,
-                                            pre_close_map=pre_close_map)
+                                            pre_close_map=pre_close_map,
+                                            daily_bars=self.daily_bars)
 
         # L1 准入
         contexts = screen_l1_access(contexts, self.l1_config)
@@ -270,7 +271,8 @@ class BacktestEngine:
 
         # 重建所有S1通过的context (带精确S2指标)
         rebuilt = adapter.adapt_single_day(
-            snapshot_filtered, date_str, bars_5min=bars_5min, pre_close_map=pre_close_map
+            snapshot_filtered, date_str, bars_5min=bars_5min, pre_close_map=pre_close_map,
+            daily_bars=self.daily_bars,
         )
         # 重新应用 L1 + K线
         rebuilt = screen_l1_access(rebuilt, self.l1_config)

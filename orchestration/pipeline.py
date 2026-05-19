@@ -24,6 +24,8 @@ from data_provider.tencent_fetcher import TencentFetcher
 from data_provider.eastmoney_flow_fetcher import EastmoneyFlowFetcher
 from data_provider.northbound_fetcher import get_northbound_sentiment
 from data_provider.concept_analyzer import get_concept_analyzer
+from data_provider.kline_provider import KlineProvider
+from data_provider.board_utils import get_limit_pct
 from screening.context import StockContext
 from screening.funnel import FunnelPipeline, FunnelConfig
 from screening.cache import StockMetricsCache
@@ -61,10 +63,16 @@ class LateSessionPipeline:
         # K线配置 (S1)
         self.kline_config = screening_configs.get('kline')
 
-        # 初始化资金流向 (东方财富)
-        self.baidu_flow: Optional[EastmoneyFlowFetcher] = None
+        # 初始化资金流向 (多源优先级链: 新浪 → 东方财富)
+        self.fund_flow_fetchers: list = []
         if config.enable_capital_flow:
-            self.baidu_flow = EastmoneyFlowFetcher(timeout=15.0, max_workers=2)
+            from data_provider.sina_fund_flow import SinaFundFlowFetcher
+            self.fund_flow_fetchers.append(
+                SinaFundFlowFetcher(timeout=8.0, max_workers=8)
+            )
+            self.fund_flow_fetchers.append(
+                EastmoneyFlowFetcher(timeout=15.0, max_workers=2)
+            )
 
         # 初始化题材分析器
         self.concept_analyzer = get_concept_analyzer()
@@ -78,11 +86,15 @@ class LateSessionPipeline:
         # S0 板块映射 (股票代码 → 板块名)
         self._s0_sector_map: dict[str, str] = {}
 
-        # S2→S3 基线值 (用于 Tencent 量价近似资金流向)
-        self._s2_baselines: dict[str, dict] = {}
+        # K线数据提供器 (S0之后初始化，S0才知道候选池)
+        self._kline_provider: Optional[KlineProvider] = None
+        self._daily_metrics: dict[str, dict] = {}  # code → {ma5, ma10, ma20, volatility, atr}
+        self._daily_cache: dict[str, "pd.DataFrame"] = {}  # code → 原始日线DataFrame (供K线形态用)
+        self._5min_metrics: dict[str, dict] = {}   # code → {price_at_1430, late_price_change, ...}
 
         # 资金流向是否已拉取 (S2仅首次)
         self._fund_flow_fetched: bool = False
+        self._fund_flow_data: dict[str, dict] = {}  # S2获取的原始数据，供S3回填
 
         # 初始化LLM (如果配置了)
         self.llm_client: Optional[LLMClient] = None
@@ -185,6 +197,21 @@ class LateSessionPipeline:
             # === S0: 板块预筛选 ===
             if 0 in stages:
                 s0_codes = self._run_stage0()
+                # 加载S0候选池的真实日线数据
+                if s0_codes and len(s0_codes) > 0:
+                    self._kline_provider = KlineProvider()
+                    logger.info(f"加载 {len(s0_codes)} 只候选股票的日线数据...")
+                    self._daily_cache = self._kline_provider.load_daily_batch(s0_codes, bars=30)
+                    for code, df in self._daily_cache.items():
+                        if not df.empty:
+                            self._daily_metrics[code] = {
+                                'ma5': KlineProvider.compute_ma(df)[0],
+                                'ma10': KlineProvider.compute_ma(df)[1],
+                                'ma20': KlineProvider.compute_ma(df)[2],
+                                'volatility': KlineProvider.compute_volatility(df),
+                                'atr': KlineProvider.compute_atr(df),
+                            }
+                    logger.info(f"日线指标计算完成: {len(self._daily_metrics)} 只")
             else:
                 s0_codes = None
 
@@ -257,75 +284,117 @@ class LateSessionPipeline:
         return contexts
 
     def _enrich_contexts(self, contexts: list[StockContext]):
-        """用快照/预加载数据增强StockContext
+        """用预加载/日线/5分钟线数据增强StockContext
 
-        注意: 近似值必须保守，避免在活跃交易时段让过多股票通过 L2。
-        主要数据源(Tencent)提供的是全天数据，不能当作尾盘数据使用。
+        所有数据来自真实数据源:
+          - MA/波动率: 日线K线 (KlineProvider, mootdx TCP)
+          - 尾盘指标: 5分钟K线 (KlineProvider, mootdx TCP)
+          - 解禁/题材/板块: 预加载 (DataPreloader)
+          - 资金流向: 东财 push2his/push2 (EastmoneyFlowFetcher)
         """
         for ctx in contexts:
-            # 午后量比: 仅当全天量比 >= 3.0 时才近似，且午后通常低于全天(×0.7)
-            if ctx.vol_ratio >= 3.0 and ctx.afternoon_volume_ratio == 0:
-                ctx.afternoon_volume_ratio = ctx.vol_ratio * 0.7
+            # === 日线指标: MA5/MA10/MA20, 波动率 ===
+            dm = self._daily_metrics.get(ctx.code)
+            if dm:
+                ctx.ma5 = dm['ma5']
+                ctx.ma10 = dm['ma10']
+                ctx.ma20 = dm['ma20']
+                ctx.volatility = dm['volatility']
+                ctx.data_quality_flags['daily_kline'] = True
+                ctx.data_quality_flags['ma_calculated'] = True
+                ctx.data_quality_flags['volatility_calculated'] = True
 
-            # 全天涨幅的约35%归因到尾盘 (保守估计，避免L2/L4过度宽松)
-            if ctx.late_price_change == 0 and ctx.change_pct != 0:
-                ctx.late_price_change = abs(ctx.change_pct) * 0.35
+            # === 5分钟线尾盘指标 ===
+            fm = self._5min_metrics.get(ctx.code)
+            if fm:
+                ctx.price_at_1430 = fm['price_at_1430']
+                ctx.late_price_change = fm['late_price_change']
+                ctx.afternoon_volume_ratio = fm['afternoon_volume_ratio']
+                ctx.last_5min_volume_pct = fm['last_5min_volume_pct']
+                ctx.morning_volume = fm['morning_volume']
+                ctx.afternoon_volume = fm['afternoon_volume']
+                ctx.last_5min_volume = fm['last_5min_volume']
+                ctx.broke_high = fm['broke_high']
+                ctx.intraday_high = fm['intraday_high']
+                ctx.data_quality_flags['5min_kline'] = True
+                ctx.data_quality_flags['late_metrics_calculated'] = True
 
-            # 接近日内新高视为突破 (1%以内)
-            if ctx.high > 0 and ctx.price >= ctx.high * 0.99:
-                ctx.broke_high = True
-
-            # 尾盘量占比: 仅当量比足够高时才近似
-            if ctx.vol_ratio >= 3.0 and ctx.last_5min_volume_pct == 0:
-                ctx.last_5min_volume_pct = min(ctx.vol_ratio * 4, 15.0)
-
-            # 用振幅近似波动率
-            if ctx.volatility == 0 and ctx.amplitude > 0:
-                ctx.volatility = ctx.amplitude * 5
-
-            # 用昨收近似MA5 (K线数据不可用时)
-            if ctx.ma5 == 0 and ctx.pre_close > 0:
-                ctx.ma5 = ctx.pre_close * 0.98
-            if ctx.ma10 == 0 and ctx.pre_close > 0:
-                ctx.ma10 = ctx.pre_close * 0.97
-
-            # 解禁检查 (来自预加载)
+            # === 解禁检查 (来自预加载) ===
             if self.preloader and ctx.code in self.preloader.unlock_stocks:
                 ctx.is_unlock_date = True
 
-            # 热点题材 (来自预加载)
+            # === 热点题材 (来自预加载) ===
             if self.preloader and ctx.code in self.preloader.hot_concepts:
                 ctx.hot_concepts = self.preloader.hot_concepts[ctx.code]
                 if ctx.hot_concepts:
                     ctx.leader_strength = True
 
-            # === 修复: 回填板块信息 (S0建立映射 → TencentFetcher无板块字段) ===
+            # === 回填板块信息 (S0建立映射 → TencentFetcher无板块字段) ===
             if not ctx.sector and ctx.code in self._s0_sector_map:
                 ctx.sector = self._s0_sector_map[ctx.code]
 
-            # === 修复: 写入板块涨跌幅 (之前从未被设置，L4永远为0) ===
+            # === 写入板块涨跌幅 ===
             if ctx.sector and self.preloader:
                 ctx.sector_performance = self.preloader.get_sector_performance(ctx.sector)
 
-            # === S3: Tencent 量价近似替代资金流向趋势 ===
-            if ctx.code in self._s2_baselines:
-                baseline = self._s2_baselines[ctx.code]
-                # 量比变化 → 量能持续性 (正值表示尾盘量能在加速)
-                vol_ratio_delta = ctx.vol_ratio - baseline.get('vol_ratio', ctx.vol_ratio)
-                # 价格变化 → 尾盘加速程度
-                price_delta_pct = (
-                    (ctx.price - baseline.get('price', ctx.price))
-                    / max(baseline.get('price', ctx.price), 0.01) * 100
-                )
-                # 换手率增量
-                turnover_delta = ctx.turnover_rate - baseline.get('turnover_rate', ctx.turnover_rate)
+            # === 从日线计算: 连续涨停天数 ===
+            if dm and ctx.code in self._daily_cache:
+                df = self._daily_cache[ctx.code]
+                if not df.empty and len(df) >= 2:
+                    limit_pct = get_limit_pct(ctx.code, ctx.is_st)
+                    count = 0
+                    for i in range(1, min(10, len(df))):
+                        prev_close = float(df['close'].iloc[-i-1])
+                        day_close = float(df['close'].iloc[-i])
+                        if prev_close > 0:
+                            day_change = (day_close - prev_close) / prev_close * 100
+                            if day_change >= limit_pct * 0.95:
+                                count += 1
+                            else:
+                                break
+                    ctx.consecutive_limit_ups = count
 
-                # 综合判断: 量价齐升 → 资金持续流入信号
-                if vol_ratio_delta > 0 and price_delta_pct > 0:
-                    if ctx.big_order_net == 0:
-                        ctx.big_order_net = ctx.turnover * 0.02  # 近似2%为大单
-                    if ctx.active_buy_ratio == 0:
-                        ctx.active_buy_ratio = min(55.0 + vol_ratio_delta * 2, 70.0)
+            # === 近10日胜率 (收盘>开盘) ===
+            if ctx.code in self._daily_cache:
+                df = self._daily_cache[ctx.code]
+                if not df.empty and len(df) >= 5:
+                    recent = df.tail(10)
+                    wins = sum(
+                        1 for _, row in recent.iterrows()
+                        if float(row.get('close', 0)) > float(row.get('open', 0))
+                    )
+                    ctx.history_win_rate = wins / len(recent) * 100
+
+            # === 接近关键价位 (MA20 ±2%) ===
+            if ctx.ma20 > 0 and ctx.price > 0:
+                if abs(ctx.price - ctx.ma20) / ctx.ma20 * 100 <= 2.0:
+                    ctx.near_key_level = True
+
+            # === 板块排名百分位 ===
+            if self.preloader and ctx.sector:
+                all_perf = self.preloader.sector_performance
+                if all_perf and ctx.sector in all_perf and len(all_perf) > 1:
+                    ranked = sorted(all_perf.values(), reverse=True)
+                    my_pct = all_perf[ctx.sector]
+                    try:
+                        rank = next(
+                            i for i, v in enumerate(ranked) if v == my_pct
+                        ) + 1
+                        ctx.sector_rank_pct = rank / len(ranked) * 100
+                    except StopIteration:
+                        pass
+
+            # === S3资金流回填 (从S2缓存恢复) ===
+            if self._fund_flow_data:
+                fd = self._fund_flow_data.get(ctx.code, {})
+                if fd:
+                    ctx.big_order_net = fd.get("mainForce", 0) * 10000
+                    ctx.big_order_ratio = (
+                        abs(ctx.big_order_net) / max(ctx.turnover, 1)
+                        if ctx.turnover > 0 else 0
+                    )
+                    ctx.active_buy_ratio = fd.get("active_buy_ratio", 50.0)
+                    ctx.data_quality_flags['fund_flow'] = True
 
     # ============================================================
     # S0: 板块预筛选
@@ -349,33 +418,23 @@ class LateSessionPipeline:
     # ============================================================
 
     def _run_stage1(self, s0_codes: list[str] = None) -> list[StockContext]:
-        """S1: K线形态预筛选 + L1基础准入"""
+        """S1: K线形态预筛选 + L1基础准入 (14:30, 单次执行)"""
         self.tracker.stage_start("S1_K线扫描", len(s0_codes) if s0_codes else 5000)
 
-        loop_interval = self.config.s1_loop_interval
-        iteration = 0
+        # 拉取量价数据 + L1基础准入
+        contexts = self._fetch_and_convert(s0_codes)
+        self._enrich_contexts(contexts)
 
-        while True:
-            iteration += 1
-            logger.info(f"S1 第{iteration}轮扫描...")
+        from screening.layer1_access import screen_l1_access
+        contexts = screen_l1_access(contexts, self.funnel.config.l1)
+        self.funnel.stats['l1_count'] = len(contexts)
+        logger.info(f"S1 L1通过: {len(contexts)} 只")
 
-            # 拉取量价数据
-            contexts = self._fetch_and_convert(s0_codes)
-            self._enrich_contexts(contexts)
-
-            # L1 基础准入
-            from screening.layer1_access import screen_l1_access
-            contexts = screen_l1_access(contexts, self.funnel.config.l1)
-            self.funnel.stats['l1_count'] = len(contexts)
-            logger.info(f"S1 L1通过: {len(contexts)} 只")
-
-            # K线形态预筛选
-            if self.kline_config:
-                from screening.layer_kline import screen_kline
-                contexts = screen_kline(contexts, self.kline_config)
-
-            if not self._sleep_or_break("14:50", loop_interval):
-                break
+        # K线形态预筛选
+        if self.kline_config:
+            from screening.layer_kline import screen_kline
+            contexts = screen_kline(contexts, self.kline_config, self._daily_cache)
+            logger.info(f"S1 K线形态通过: {len(contexts)} 只")
 
         self.tracker.stage_end("S1_K线扫描", len(contexts))
         return contexts
@@ -385,7 +444,7 @@ class LateSessionPipeline:
     # ============================================================
 
     def _run_stage2(self, contexts: list[StockContext]) -> list[StockContext]:
-        """S2: 尾盘异常检测 + 资金流向富化（仅首轮拉取）"""
+        """S2: 尾盘异常检测 + 资金流向富化 + 5分钟线尾盘指标"""
         self.tracker.stage_start("S2_尾盘异常", len(contexts))
 
         loop_interval = self.config.s2_loop_interval
@@ -400,18 +459,24 @@ class LateSessionPipeline:
             contexts = self._fetch_and_convert(codes)
             self._enrich_contexts(contexts)
 
-            # === 资金流向: 仅首轮拉取 ===
-            if iteration == 1 and self.baidu_flow and contexts:
-                self._enrich_fund_flow(contexts)
+            # === 首轮: 加载5分钟线 + 资金流向 ===
+            if iteration == 1:
+                # 5分钟K线 → 尾盘指标
+                if self._kline_provider:
+                    l1_codes = [c.code for c in contexts if c.l1_passed]
+                    if l1_codes:
+                        logger.info(f"加载 {len(l1_codes)} 只的5分钟K线...")
+                        min5_cache = self._kline_provider.load_5min_batch(l1_codes, bars=48)
+                        for code, df in min5_cache.items():
+                            if not df.empty:
+                                self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
+                        logger.info(f"5分钟线指标计算完成: {len(self._5min_metrics)} 只")
+                        # 用5分钟线数据重新增强contexts
+                        self._enrich_contexts(contexts)
 
-            # 保存 S2 基线值 (供 S3 Tencent 近似用)
-            for ctx in contexts:
-                if ctx.l2_passed or ctx.l2_passed is None:
-                    self._s2_baselines[ctx.code] = {
-                        'vol_ratio': ctx.vol_ratio,
-                        'price': ctx.price,
-                        'turnover_rate': ctx.turnover_rate,
-                    }
+                # 资金流向 (多源优先级链)
+                if self.fund_flow_fetchers:
+                    self._enrich_fund_flow(contexts)
 
             # L2 尾盘异常检测
             from screening.layer2_anomaly import screen_l2_anomaly
@@ -436,11 +501,16 @@ class LateSessionPipeline:
         return contexts
 
     def _enrich_fund_flow(self, contexts: list[StockContext]):
-        """资金流向富化 (东财 push2his，仅 S2 首轮调用)"""
+        """资金流向富化 (多源优先级链: 新浪 → 东方财富，仅 S2 首轮调用)
+
+        contexts 已通过 S1 筛选 (l1_passed 在新 StockContext 上为 None，
+        因为 _fetch_and_convert 创建新对象。所有进入 S2 的都是 L1 幸存者。)
+        """
         if self._fund_flow_fetched:
             return
 
-        l2_candidates = [c for c in contexts if c.l1_passed]
+        # S2 的 contexts 都是 S1 幸存者，直接使用全部候选
+        l2_candidates = list(contexts)
         enrich_limit = self.config.max_capital_enrich
         l2_candidates.sort(
             key=lambda c: abs(c.change_pct) * c.vol_ratio * c.turnover,
@@ -454,38 +524,51 @@ class LateSessionPipeline:
                 f"仅对前 {enrich_limit} 只做资金富化"
             )
 
-        logger.info(f"资金流向: 富化 {len(enrich_candidates)} 只...")
         codes = [c.code for c in enrich_candidates]
-        flow_data = self.baidu_flow.enrich_batch(codes)
+        flow_data: dict[str, dict] = {}
+        source_name = "none"
+
+        # 多源优先级链: 新浪 → 东方财富
+        for fetcher in self.fund_flow_fetchers:
+            source_name = type(fetcher).__name__
+            logger.info(f"资金流向: 尝试 {source_name} ({len(codes)} 只)...")
+            flow_data = fetcher.enrich_batch(codes)
+            if flow_data:
+                logger.info(f"资金流向: {source_name} 成功, {len(flow_data)} 只有效数据")
+                break
+            else:
+                logger.warning(f"资金流向: {source_name} 返回空，尝试下一个源...")
+        else:
+            if self.fund_flow_fetchers:
+                logger.warning("资金流向: 所有数据源均返回空")
+
+        # 保存原始数据供 S3 回填
+        self._fund_flow_data = flow_data
 
         today_count = 0
-        yesterday_count = 0
         today_str = datetime.now().strftime("%Y-%m-%d")
 
         for ctx in enrich_candidates:
             fd = flow_data.get(ctx.code, {})
             if fd:
+                ctx.data_quality_flags['fund_flow'] = True
+                ctx.data_quality_flags['fund_flow_source'] = source_name
                 ctx.big_order_net = fd.get("mainForce", 0) * 10000
                 ctx.big_order_ratio = (
                     abs(ctx.big_order_net) / max(ctx.turnover, 1)
                     if ctx.turnover > 0 else 0
                 )
                 ctx.active_buy_ratio = fd.get("active_buy_ratio", 50.0)
-                dd = fd.get("data_date", "")
-                if dd == today_str:
+                if fd.get("data_date", "") == today_str:
                     today_count += 1
-                elif dd:
-                    yesterday_count += 1
 
-        self.capital_data_date = "today" if today_count > 0 else (
-            "yesterday" if yesterday_count > 0 else "none"
+        # 仅当日数据有效，昨日数据视为无数据
+        self.capital_data_date = "today" if today_count > 0 else "none"
+        date_label = f"当日 {today_count} 只" if today_count else "无当日数据"
+        logger.info(
+            f"资金流向: 获得 {len(flow_data)} 只有效数据 "
+            f"({date_label}, 来源: {source_name})"
         )
-        date_label = (
-            f"今日 {today_count} 只" if today_count
-            else f"昨日(降级) {yesterday_count} 只" if yesterday_count
-            else "无数据"
-        )
-        logger.info(f"资金流向: 获得 {len(flow_data)} 只有效数据 ({date_label})")
         self._fund_flow_fetched = True
 
     # ============================================================
@@ -493,7 +576,7 @@ class LateSessionPipeline:
     # ============================================================
 
     def _run_stage3(self, contexts: list[StockContext]) -> tuple:
-        """S3: 均线验证 + 北向情绪 (不拉取 push2，用 S2 基线做 Tencent 近似)"""
+        """S3: 均线验证 + 北向情绪 + L4评分"""
         self.tracker.stage_start("S3_均线验证", len(contexts))
 
         loop_interval = self.config.s3_loop_interval
@@ -534,7 +617,7 @@ class LateSessionPipeline:
             from screening.layer4_scoring import score_l4, set_northbound_sentiment, set_concept_analyzer
             set_northbound_sentiment(self.northbound_sentiment)
             set_concept_analyzer(self.concept_analyzer)
-            scored = score_l4(l3_passed, self.funnel.config.l4)
+            scored = score_l4(l3_passed, self.funnel.config.l4, self.capital_data_date)
             self.funnel.stats['l4_count'] = len(scored)
 
             if not self._sleep_or_break("14:57", loop_interval):
@@ -617,6 +700,12 @@ class LateSessionPipeline:
             'concept_total': concept_dist.get("total_concepts", 0),
             'concept_top5': concept_dist.get("top10", [])[:5],
             'concept_occurrences': concept_dist.get("total_occurrences", 0),
+            # 数据质量统计
+            'dq_daily_kline': sum(1 for c in top30 if c.data_quality_flags.get('daily_kline')),
+            'dq_5min_kline': sum(1 for c in top30 if c.data_quality_flags.get('5min_kline')),
+            'dq_fund_flow': sum(1 for c in top30 if c.data_quality_flags.get('fund_flow')),
+            'dq_late_metrics': sum(1 for c in top30 if c.data_quality_flags.get('late_metrics_calculated')),
+            'dq_ma_calculated': sum(1 for c in top30 if c.data_quality_flags.get('ma_calculated')),
         }
 
         md = render_report(

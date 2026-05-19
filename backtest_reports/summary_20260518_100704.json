@@ -1,0 +1,37 @@
+{
+  "backtest_info": {
+    "total_days": 3,
+    "days_with_signals": 3
+  },
+  "performance": {
+    "total_trades": 10,
+    "win_rate": 50.0,
+    "avg_return_pct": -0.0661,
+    "median_return_pct": -0.077,
+    "std_return_pct": 0.5117,
+    "total_return_pct": -0.66,
+    "avg_win_pct": 0.3509,
+    "avg_loss_pct": -0.4831,
+    "profit_factor": 0.73,
+    "win_loss_ratio": 0.73,
+    "max_drawdown_pct": 2.1,
+    "sharpe_ratio": -2.05,
+    "calmar_ratio": -7.95,
+    "max_consecutive_wins": 3,
+    "max_consecutive_losses": 4
+  },
+  "stratified": {
+    "strong_buy": {
+      "count": 6,
+      "win_rate": 33.33,
+      "avg_return": -0.1854,
+      "total_return": -1.11
+    },
+    "buy": {
+      "count": 4,
+      "win_rate": 75.0,
+      "avg_return": 0.1128,
+      "total_return": 0.45
+    }
+  }
+}

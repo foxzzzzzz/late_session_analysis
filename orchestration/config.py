@@ -52,7 +52,7 @@ class SystemConfig:
     # === 并行 ===
     max_data_workers: int = 3
 
-    # === 百度资金流向 ===
+    # === 资金流向 (新浪 + 东财降级) ===
     enable_capital_flow: bool = True
     max_capital_enrich: int = 300  # S3资金流向富化上限，控制API调用量和时效性
 
@@ -65,10 +65,11 @@ class SystemConfig:
     s0_min_stocks: int = 200
 
     # === S1 K线形态预筛选 ===
-    kline_min_atr_pct: float = 2.0        # 波动率最低(%): ATR/Close ≥ 2%
+    kline_min_atr_pct: float = 2.0         # ATR/Close 最低(%)
+    kline_max_atr_pct: float = 8.5         # ATR/Close 最高(%)
     kline_max_consecutive_up: int = 5      # 最多连涨天数
-    kline_min_yang_body_pct: float = 1.0   # 阳线实体最低涨幅(%)
-    kline_min_breakthrough_pct: float = 1.0  # 突破确认: 收盘距前高 ≤ 1%
+    kline_max_up_in_9days: int = 6         # 近9天最多涨几天
+    kline_max_single_day_pct: float = 6.5  # 单日涨幅上限(%)
 
     # === 时间循环间隔 (秒) ===
     s1_loop_interval: int = 180   # S1 K线扫描: 每3分钟
@@ -139,8 +140,10 @@ class SystemConfig:
 
         # S1 K线
         self.kline_min_atr_pct = float(os.getenv("KLINE_MIN_ATR_PCT", str(self.kline_min_atr_pct)))
+        self.kline_max_atr_pct = float(os.getenv("KLINE_MAX_ATR_PCT", str(self.kline_max_atr_pct)))
         self.kline_max_consecutive_up = int(os.getenv("KLINE_MAX_CONSECUTIVE_UP", str(self.kline_max_consecutive_up)))
-        self.kline_min_yang_body_pct = float(os.getenv("KLINE_MIN_YANG_BODY_PCT", str(self.kline_min_yang_body_pct)))
+        self.kline_max_up_in_9days = int(os.getenv("KLINE_MAX_UP_IN_9DAYS", str(self.kline_max_up_in_9days)))
+        self.kline_max_single_day_pct = float(os.getenv("KLINE_MAX_SINGLE_DAY_PCT", str(self.kline_max_single_day_pct)))
 
         # 时间循环
         self.s1_loop_interval = int(os.getenv("S1_LOOP_INTERVAL", str(self.s1_loop_interval)))
@@ -169,8 +172,10 @@ class SystemConfig:
             ),
             'kline': KlineConfig(
                 min_atr_pct=self.kline_min_atr_pct,
+                max_atr_pct=self.kline_max_atr_pct,
                 max_consecutive_up=self.kline_max_consecutive_up,
-                min_yang_body_pct=self.kline_min_yang_body_pct,
+                max_up_in_9days=self.kline_max_up_in_9days,
+                max_single_day_pct=self.kline_max_single_day_pct,
             ),
             'l2': L2Config(
                 volume_ratio_min=self.l2_volume_ratio,

@@ -413,6 +413,8 @@ class BacktestDataLoader:
             result[date_val] = {
                 "today_net_yi": net,
                 "available": True,
+                "trend_score": 50.0,      # 历史回测固定中性分
+                "trend_label": "neutral", # 历史北向趋势标签
             }
         return result
 

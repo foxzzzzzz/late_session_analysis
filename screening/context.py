@@ -91,30 +91,64 @@ class StockContext:
     llm_reason: str = ""                # 简要理由
     llm_fallback: bool = False          # 是否降级到规则评分
 
+    # === 数据质量标记 ===
+    data_quality_flags: dict[str, bool] = field(default_factory=lambda: {
+        'daily_kline': False,           # 日线是否加载成功
+        '5min_kline': False,            # 5分钟线是否加载成功
+        'fund_flow': False,             # 资金流向是否获取到
+        'ma_calculated': False,         # MA是否真实计算
+        'volatility_calculated': False, # 波动率是否真实计算
+        'late_metrics_calculated': False,  # 尾盘指标是否真实计算
+    })
+
     # === 最终决策 ===
     final_score: float = 0.0
     final_rank: int = 0
     recommendation: str = ""            # strong_buy/buy/watch/skip
 
+    def _get_effective_limit_up(self) -> float:
+        """获取有效涨停价，limit_up=0时从pre_close+代码推断"""
+        if self.limit_up > 0:
+            return self.limit_up
+        if self.pre_close > 0:
+            from data_provider.board_utils import get_limit_pct
+            pct = get_limit_pct(self.code, self.is_st)
+            return round(self.pre_close * (1 + pct / 100), 2)
+        return 0.0
+
+    def _get_effective_limit_down(self) -> float:
+        """获取有效跌停价"""
+        if self.limit_down > 0:
+            return self.limit_down
+        if self.pre_close > 0:
+            from data_provider.board_utils import get_limit_pct
+            pct = get_limit_pct(self.code, self.is_st)
+            return round(self.pre_close * (1 - pct / 100), 2)
+        return 0.0
+
     @property
     def is_limit_up(self) -> bool:
         """是否涨停"""
-        if self.limit_up <= 0:
+        lu = self._get_effective_limit_up()
+        if lu <= 0:
             return False
-        return abs(self.price - self.limit_up) < 0.005
+        return abs(self.price - lu) < 0.005
 
     @property
     def is_limit_down(self) -> bool:
         """是否跌停"""
-        if self.limit_down <= 0:
+        ld = self._get_effective_limit_down()
+        if ld <= 0:
             return False
-        return abs(self.price - self.limit_down) < 0.005
+        return abs(self.price - ld) < 0.005
 
     @property
     def is_one_word_limit(self) -> bool:
         """是否一字板 (开盘即涨停/跌停)"""
-        if self.is_limit_up and abs(self.open - self.limit_up) < 0.005:
+        lu = self._get_effective_limit_up()
+        if lu > 0 and abs(self.open - lu) < 0.005:
             return True
-        if self.is_limit_down and abs(self.open - self.limit_down) < 0.005:
+        ld = self._get_effective_limit_down()
+        if ld > 0 and abs(self.open - ld) < 0.005:
             return True
         return False

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class L3Config:
     # 技术位置
-    require_above_ma: bool = False        # MVP阶段放宽：不强制要求站上均线
+    require_above_ma: bool = True         # 有真实日线MA数据，强制站上均线
     position_20d_bottom_pct: float = 50.0 # 近20日位置低于此百分位视为底部
     # 市场情绪
     sector_rank_top_pct: float = 30.0     # 板块排名前30%

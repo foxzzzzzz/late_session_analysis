@@ -33,7 +33,7 @@ class L2Config:
     # 开关
     require_volume: bool = True
     require_price_pattern: bool = True
-    require_capital: bool = False         # 资金流向数据在L4评分阶段注入
+    require_capital: bool = True         # 新浪资金流已接入，启用资金流向筛选
     require_orderbook: bool = False       # MVP阶段盘口数据来自pytdx(可选)
 
 
@@ -107,7 +107,8 @@ def _check_l2(ctx, cfg: L2Config, has_depth: bool, has_capital: bool) -> bool:
         if ctx.daily_avg_big_order_ratio > 0:
             if ctx.big_order_ratio < ctx.daily_avg_big_order_ratio * cfg.big_order_ratio_mult:
                 capital_ok = False
-        if ctx.active_buy_ratio < cfg.active_buy_ratio_min:
+        # 新浪资金流可能返回负值(主力净流出), 用绝对值判断
+        if abs(ctx.active_buy_ratio) < cfg.active_buy_ratio_min:
             capital_ok = False
         if not capital_ok:
             return False
