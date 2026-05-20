@@ -20,6 +20,8 @@ Round 2 (14:33) 深度验证 — 不合格标记但暂不淘汰 (L4降权):
   13. 不能长上影线
 """
 import logging
+import os
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -28,6 +30,11 @@ import pandas as pd
 from screening.context import StockContext
 
 logger = logging.getLogger(__name__)
+
+# 调试: 跟踪每个R1检查的失败计数
+_debug_fail_counts = defaultdict(int)
+_debug_fail_details: list[dict] = []
+_debug_max_details = int(os.getenv("KL_DEBUG_DETAILS", "3"))
 
 
 @dataclass
@@ -38,8 +45,9 @@ class KlineConfig:
     max_atr_pct: float = 8.5           # ATR/Close 最高(%) — 过滤过度投机
     max_consecutive_up: int = 5         # 最多连涨天数
     max_up_in_9days: int = 6           # 近9天最多涨几天
-    min_yang_ratio_4d: float = 0.25    # 近4天阳线占比最低 (1/4)
-    min_consecutive_close_rise: int = 0 # 至少连续N天收盘上涨 (0=不检查)
+    min_yang_ratio_4d: float = 0.75   # 近4天阳线占比最低 (3/4)
+    min_consecutive_close_rise: int = 4  # 至少连续N天收盘上涨
+    min_close_rise_pct: float = 0.5      # 连续上涨每天最低涨幅(%)
     max_single_day_pct: float = 6.5    # 单日涨幅上限(%)
     max_atr_multiple: float = 2.0      # 单日涨幅 ≤ N倍ATR
 
@@ -71,6 +79,10 @@ def screen_kline(
     Returns:
         通过K线形态筛选的股票列表
     """
+    global _debug_fail_counts, _debug_fail_details
+    _debug_fail_counts = defaultdict(int)
+    _debug_fail_details = []
+
     daily_cache = daily_cache or {}
     passed: list[StockContext] = []
     r1_fail = 0
@@ -96,10 +108,33 @@ def screen_kline(
         ctx.kline_passed = True
         passed.append(ctx)
 
-    logger.info(
-        f"K线预筛选: {len(passed)}/{len(contexts)} 通过 "
-        f"(R1淘汰: {r1_fail}形态+{r1_missing}缺数据, R2警告: {r2_warn})"
-    )
+    # 调试: 打印失败分布
+    if r1_fail > 0 or r1_missing > 0:
+        parts = []
+        for check_name in ["missing_data", "atr_range", "consecutive_up", "up_frequency",
+                           "yang_ratio", "close_momentum", "single_day_pct", "pct_vs_atr"]:
+            c = _debug_fail_counts.get(check_name, 0)
+            if c > 0:
+                parts.append(f"{check_name}={c}")
+        logger.info(
+            f"K线预筛选: {len(passed)}/{len(contexts)} 通过 "
+            f"(R1淘汰: {r1_fail}形态+{r1_missing}缺数据, R2警告: {r2_warn})"
+        )
+        if parts:
+            logger.info(f"K线失败分布: {' | '.join(parts)}")
+        for d in _debug_fail_details:
+            logger.debug(
+                f"K线失败详情: code={d['code']} check={d['check']} "
+                f"chg={d['change_pct']}% price={d['price']} "
+                f"atr={d['atr_pct']}% rows={d['df_rows']} "
+                f"close[-3:]={d['close_last3']}"
+            )
+    else:
+        logger.info(
+            f"K线预筛选: {len(passed)}/{len(contexts)} 通过 "
+            f"(R1淘汰: {r1_fail}形态+{r1_missing}缺数据, R2警告: {r2_warn})"
+        )
+
     return passed
 
 
@@ -110,37 +145,78 @@ def screen_kline(
 def _round1_basic_filter(ctx: StockContext, cfg: KlineConfig, df: Optional[pd.DataFrame]) -> bool:
     """Round 1 七项基础检查，任一项不通过即淘汰"""
     if df is None or df.empty:
+        _debug_fail_counts["missing_data"] += 1
         return cfg.skip_on_missing_data  # False → 无日线数据则淘汰
 
     # 1. ATR/Close 在合理范围
     if not _check_atr_range(ctx, cfg, df):
+        _debug_fail_counts["atr_range"] += 1
+        _record_debug(ctx, "atr_range", df)
         return False
 
     # 2. 连涨天数检查
     if not _check_consecutive_up(ctx, cfg, df):
+        _debug_fail_counts["consecutive_up"] += 1
+        _record_debug(ctx, "consecutive_up", df)
         return False
 
     # 3. 近9天上涨频率
     if not _check_up_frequency(ctx, cfg, df):
+        _debug_fail_counts["up_frequency"] += 1
+        _record_debug(ctx, "up_frequency", df)
         return False
 
     # 4. 阳线占比 + 今日阳线
     if not _check_yang_ratio(ctx, cfg, df):
+        _debug_fail_counts["yang_ratio"] += 1
+        _record_debug(ctx, "yang_ratio", df)
         return False
 
     # 5. 近期收盘持续上涨
     if not _check_close_momentum(ctx, cfg, df):
+        _debug_fail_counts["close_momentum"] += 1
+        _record_debug(ctx, "close_momentum", df)
         return False
 
     # 6. 单日涨幅上限
     if not _check_single_day_pct(ctx, cfg):
+        _debug_fail_counts["single_day_pct"] += 1
+        _record_debug(ctx, "single_day_pct", df)
         return False
 
     # 7. 单日涨幅 vs ATR
     if not _check_pct_vs_atr(ctx, cfg, df):
+        _debug_fail_counts["pct_vs_atr"] += 1
+        _record_debug(ctx, "pct_vs_atr", df)
         return False
 
     return True
+
+
+def _record_debug(ctx, check: str, df: pd.DataFrame):
+    """记录前N条失败详情"""
+    if len(_debug_fail_details) >= _debug_max_details:
+        return
+    close = pd.to_numeric(df["close"], errors="coerce")
+    atr_val = _safe_atr(df)
+    atr_pct = (atr_val / float(close.iloc[-1]) * 100) if atr_val > 0 and len(close) > 0 else 0
+    _debug_fail_details.append({
+        "code": ctx.code,
+        "check": check,
+        "change_pct": round(ctx.change_pct, 4),
+        "price": round(ctx.price, 2),
+        "atr_pct": round(atr_pct, 2),
+        "df_rows": len(df),
+        "close_last3": [round(float(x), 2) for x in close.iloc[-3:].tolist()] if len(close) >= 3 else [],
+    })
+
+
+def _safe_atr(df: pd.DataFrame) -> float:
+    try:
+        from data_provider.kline_provider import KlineProvider
+        return KlineProvider.compute_atr(df)
+    except Exception:
+        return 0.0
 
 
 def _check_atr_range(ctx: StockContext, cfg: KlineConfig, df: pd.DataFrame) -> bool:
@@ -201,7 +277,7 @@ def _check_yang_ratio(ctx: StockContext, cfg: KlineConfig, df: pd.DataFrame) -> 
 
 
 def _check_close_momentum(ctx: StockContext, cfg: KlineConfig, df: pd.DataFrame) -> bool:
-    """近期有持续收盘上涨 (至少连续N天)"""
+    """近期有持续收盘上涨，每天 ≥ 0.5%"""
     if cfg.min_consecutive_close_rise <= 0:
         return True
     close = pd.to_numeric(df["close"], errors="coerce").dropna()
@@ -215,7 +291,10 @@ def _check_close_momentum(ctx: StockContext, cfg: KlineConfig, df: pd.DataFrame)
 
     up_streak = 0
     for i in range(len(recent) - 1, 0, -1):
-        if recent.iloc[i] > recent.iloc[i - 1]:
+        prev = recent.iloc[i - 1]
+        curr = recent.iloc[i]
+        rise_pct = (curr - prev) / prev * 100
+        if rise_pct >= cfg.min_close_rise_pct:
             up_streak += 1
         else:
             break

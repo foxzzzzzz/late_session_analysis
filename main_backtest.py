@@ -1,11 +1,34 @@
 #!/usr/bin/env python3
 """尾盘策略回测系统 — CLI入口
 
+基于历史数据 + 5分钟K线精确计算的策略回测验证系统。复用实盘管线 S1→S2→S3→S4 筛选逻辑，
+用固定板块股票池替代全市场扫描，T+1 开盘卖出模拟。
+
 用法:
-  python main_backtest.py                           # 使用默认日期范围
-  python main_backtest.py --start 20260401 --end 20260515
-  python main_backtest.py --start 20260501 --end 20260515 --no-cache
-  python main_backtest.py --sectors 半导体,电子元件 --output-dir ./my_reports
+  python main_backtest.py                                    # 默认日期区间 (.env)
+  python main_backtest.py --start 20260401 --end 20260515    # 指定区间
+  python main_backtest.py --sectors 半导体,电子元件           # 自定义板块
+  python main_backtest.py --no-cache --no-5min               # 强制刷新+近似模式
+  python main_backtest.py -v                                 # 详细日志(DEBUG)
+
+环境变量覆盖 (所有 BT_* 变量均可独立于实盘管线调参):
+  BT_START_DATE / BT_END_DATE        回测日期区间
+  BT_L2_VOLUME_RATIO                 尾盘量比 (默认 1.5)
+  BT_L2_LAST5MIN_VOL_PCT             最后5分钟量占比% (默认 6.0)
+  BT_L2_LATE_RALLY_PCT               尾盘拉升% (默认 1.5)
+  BT_L2_MIN_PASS                     L2最低通过数 (默认 10)
+  BT_KLINE_MIN_YANG_RATIO_4D         近4天阳线占比 (回测默认 0.25, 实盘 0.75)
+  BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE 连续收盘上涨天数 (回测默认 0=禁用, 实盘 4)
+  BT_KLINE_MIN_CLOSE_RISE_PCT        每天最低涨幅% (回测默认 0=禁用, 实盘 0.5)
+  BT_L4_STRONG_BUY / BT_L4_BUY / BT_L4_WATCH  推荐阈值 (35/25/15)
+
+数据源:
+  日线: baostock (24/7可用, 无PE/PB/市值字段)
+  5分钟线: baostock (24/7可用, 用于S2尾盘指标精算)
+  板块成分股: akshare → baostock降级
+  资金流向: 不可用 (push2his/akshare/baostock均无法获取历史资金流)
+  北向资金: akshare历史日度汇总 (中性分50)
+  LLM: 不可用 (rule_weight=1.0, 纯规则评分)
 """
 import sys
 import os
@@ -35,10 +58,16 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python main_backtest.py                                    # 默认区间
-  python main_backtest.py --start 20260401 --end 20260515    # 指定区间
-  python main_backtest.py --start 20260501 --end 20260515 --no-cache  # 强制刷新缓存
-  python main_backtest.py --sectors 半导体,电子元件           # 自定义板块
+  python main_backtest.py                                         # 默认区间
+  python main_backtest.py --start 20260401 --end 20260515         # 指定区间
+  python main_backtest.py --start 20260501 --end 20260515 --no-cache  # 强制刷新
+  python main_backtest.py --sectors 半导体,电子元件                # 自定义板块
+
+环境变量 (BT_* 可独立于实盘管线调参):
+  BT_L2_VOLUME_RATIO, BT_L2_LAST5MIN_VOL_PCT, BT_L2_LATE_RALLY_PCT   L2尾盘阈值
+  BT_KLINE_MIN_YANG_RATIO_4D, BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE    K线形态阈值
+  BT_L4_STRONG_BUY, BT_L4_BUY, BT_L4_WATCH                          L4推荐阈值
+  详见 README.md "回测专用阈值" 章节
         """,
     )
     parser.add_argument('--start', type=str, default='',
@@ -109,12 +138,18 @@ def main():
     print("=" * 60)
     print(f"  回测区间: {config.start_date} → {config.end_date}")
     print(f"  目标板块: {', '.join(config.target_sectors)}")
+    print(f"  数据源: baostock (日线+5分钟线)")
     print(f"  5分钟线: {'启用' if config.use_5min_data else '禁用(近似)'}")
-    print(f"  资金流: {config.capital_flow_mode}")
+    print(f"  资金流: {config.capital_flow_mode} (历史数据不可用)")
+    print(f"  LLM: 不可用 (纯规则评分)")
     print(f"  滑点: {config.slippage_bps}bps  佣金: {config.commission_rate*100:.3f}%")
     print(f"  最大持仓: {config.max_positions}只/天")
     print(f"  缓存目录: {config.cache_dir}")
     print(f"  输出目录: {config.output_dir}")
+    print(f"  --- 回测专用阈值 ---")
+    print(f"  L2: 量比≥{config.l2_volume_ratio}  尾盘拉升≥{config.l2_late_rally_pct}%  量占比≥{config.l2_last5min_vol_pct}%")
+    print(f"  K线: 阳线占比≥{config.kline_min_yang_ratio_4d}  连涨≥{config.kline_min_consecutive_close_rise}天  ATR {config.kline_min_atr_pct}-{config.kline_max_atr_pct}%")
+    print(f"  L4: strong_buy≥{config.l4_strong_buy}  buy≥{config.l4_buy}  watch≥{config.l4_watch}")
     print("=" * 60 + "\n")
 
     # 执行回测

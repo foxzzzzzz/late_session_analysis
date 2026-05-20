@@ -63,16 +63,16 @@ class LateSessionPipeline:
         # K线配置 (S1)
         self.kline_config = screening_configs.get('kline')
 
-        # 初始化资金流向 (多源优先级链: 新浪 → 东方财富)
-        self.fund_flow_fetchers: list = []
+        # 资金流向 — 双源并发: 分钟线(实时mainForce) + 新浪(active_buy_ratio)
+        self._flow_minute = None     # EastmoneyMinuteFlowFetcher
+        self._flow_sina = None       # SinaFundFlowFetcher
+        self._flow_push2his = None   # EastmoneyFlowFetcher (降级)
         if config.enable_capital_flow:
             from data_provider.sina_fund_flow import SinaFundFlowFetcher
-            self.fund_flow_fetchers.append(
-                SinaFundFlowFetcher(timeout=8.0, max_workers=8)
-            )
-            self.fund_flow_fetchers.append(
-                EastmoneyFlowFetcher(timeout=15.0, max_workers=2)
-            )
+            from data_provider.eastmoney_minute_flow import EastmoneyMinuteFlowFetcher
+            self._flow_minute = EastmoneyMinuteFlowFetcher(timeout=8.0, max_workers=4)
+            self._flow_sina = SinaFundFlowFetcher(timeout=8.0, max_workers=8)
+            self._flow_push2his = EastmoneyFlowFetcher(timeout=15.0, max_workers=2)
 
         # 初始化题材分析器
         self.concept_analyzer = get_concept_analyzer()
@@ -462,30 +462,49 @@ class LateSessionPipeline:
             # === 首轮: 加载5分钟线 + 资金流向 ===
             if iteration == 1:
                 # 5分钟K线 → 尾盘指标
-                if self._kline_provider:
-                    l1_codes = [c.code for c in contexts if c.l1_passed]
-                    if l1_codes:
-                        logger.info(f"加载 {len(l1_codes)} 只的5分钟K线...")
-                        min5_cache = self._kline_provider.load_5min_batch(l1_codes, bars=48)
-                        for code, df in min5_cache.items():
-                            if not df.empty:
-                                self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
-                        logger.info(f"5分钟线指标计算完成: {len(self._5min_metrics)} 只")
-                        # 用5分钟线数据重新增强contexts
-                        self._enrich_contexts(contexts)
+                # 注意: _fetch_and_convert 创建的是新 StockContext, l1_passed 为默认值 None
+                # 但所有进入 S2 的股票都已通过 S1 筛选, 直接使用全部 codes
+                if self._kline_provider and codes:
+                    logger.info(f"加载 {len(codes)} 只的5分钟K线...")
+                    min5_cache = self._kline_provider.load_5min_batch(codes, bars=48)
+                    for code, df in min5_cache.items():
+                        if not df.empty:
+                            self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
+                    logger.info(f"5分钟线指标计算完成: {len(self._5min_metrics)} 只")
+                    # 用5分钟线数据重新增强contexts
+                    self._enrich_contexts(contexts)
 
-                # 资金流向 (多源优先级链)
-                if self.fund_flow_fetchers:
+                # 资金流向 (双源并发: 分钟线 + 新浪)
+                if self._flow_minute or self._flow_sina or self._flow_push2his:
                     self._enrich_fund_flow(contexts)
 
             # L2 尾盘异常检测
-            from screening.layer2_anomaly import screen_l2_anomaly
+            from screening.layer2_anomaly import screen_l2_anomaly, L2Config
             has_capital = self._fund_flow_fetched
+            l2_candidates = list(contexts)  # 保留全量，后续可能需要放宽重筛
             contexts = screen_l2_anomaly(
-                contexts, self.funnel.config.l2,
+                l2_candidates, self.funnel.config.l2,
                 has_depth_data=False,
                 has_capital_data=has_capital,
             )
+
+            # 最低保障: 通过数不足 min_pass 时，放宽资金条件重筛
+            min_pass = self.config.l2_min_pass
+            if len(contexts) < min_pass and has_capital and self.funnel.config.l2.require_capital:
+                import dataclasses
+                relaxed = L2Config(**dataclasses.asdict(self.funnel.config.l2))
+                relaxed.require_capital = False
+                logger.warning(
+                    f"L2 最低保障: 仅通过 {len(contexts)} 只 (<{min_pass}), "
+                    f"放宽资金条件重筛 (量+价通过即可)"
+                )
+                contexts = screen_l2_anomaly(
+                    l2_candidates, relaxed,
+                    has_depth_data=False,
+                    has_capital_data=False,
+                )
+                logger.info(f"L2 放宽后: {len(contexts)} 只通过")
+
             self.funnel.stats['l2_count'] = len(contexts)
             codes = [c.code for c in contexts]
 
@@ -501,15 +520,17 @@ class LateSessionPipeline:
         return contexts
 
     def _enrich_fund_flow(self, contexts: list[StockContext]):
-        """资金流向富化 (多源优先级链: 新浪 → 东方财富，仅 S2 首轮调用)
+        """资金流向富化 — 双源并发 + 字段合并 (仅 S2 首轮调用)
 
-        contexts 已通过 S1 筛选 (l1_passed 在新 StockContext 上为 None，
-        因为 _fetch_and_convert 创建新对象。所有进入 S2 的都是 L1 幸存者。)
+        并发拉取:
+          A. 分钟线 (push2 fflow/kline klt=1) → 实时 mainForce/super/large/retail
+          B. 新浪 (MoneyFlow) → active_buy_ratio + 备选 mainForce
+
+        合并: mainForce优先A, active_buy_ratio始终用B; B失败降级到push2his
         """
         if self._fund_flow_fetched:
             return
 
-        # S2 的 contexts 都是 S1 幸存者，直接使用全部候选
         l2_candidates = list(contexts)
         enrich_limit = self.config.max_capital_enrich
         l2_candidates.sort(
@@ -525,49 +546,98 @@ class LateSessionPipeline:
             )
 
         codes = [c.code for c in enrich_candidates]
-        flow_data: dict[str, dict] = {}
-        source_name = "none"
+        minute_data: dict[str, dict] = {}
+        sina_data: dict[str, dict] = {}
+        push2his_data: dict[str, dict] = {}
 
-        # 多源优先级链: 新浪 → 东方财富
-        for fetcher in self.fund_flow_fetchers:
-            source_name = type(fetcher).__name__
-            logger.info(f"资金流向: 尝试 {source_name} ({len(codes)} 只)...")
-            flow_data = fetcher.enrich_batch(codes)
-            if flow_data:
-                logger.info(f"资金流向: {source_name} 成功, {len(flow_data)} 只有效数据")
-                break
+        # 并发拉取分钟线 + 新浪
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            if self._flow_minute:
+                f_min = pool.submit(self._flow_minute.enrich_batch, codes)
             else:
-                logger.warning(f"资金流向: {source_name} 返回空，尝试下一个源...")
-        else:
-            if self.fund_flow_fetchers:
-                logger.warning("资金流向: 所有数据源均返回空")
+                f_min = None
+            if self._flow_sina:
+                f_sina = pool.submit(self._flow_sina.enrich_batch, codes)
+            else:
+                f_sina = None
+
+            if f_min:
+                minute_data = f_min.result() or {}
+            if f_sina:
+                sina_data = f_sina.result() or {}
+
+        # 新浪失败 → 降级 push2his (收盘后有 active_buy_ratio)
+        if not sina_data and self._flow_push2his:
+            logger.info("资金流向: 新浪返回空，降级到 push2his...")
+            push2his_data = self._flow_push2his.enrich_batch(codes) or {}
+
+        n_minute = len(minute_data)
+        n_sina = len(sina_data)
+        n_his = len(push2his_data)
+        logger.info(
+            f"资金流向: 分钟线={n_minute} 新浪={n_sina} push2his={n_his}"
+        )
 
         # 保存原始数据供 S3 回填
-        self._fund_flow_data = flow_data
+        self._fund_flow_data = minute_data or sina_data or push2his_data
 
         today_count = 0
         today_str = datetime.now().strftime("%Y-%m-%d")
 
         for ctx in enrich_candidates:
-            fd = flow_data.get(ctx.code, {})
-            if fd:
-                ctx.data_quality_flags['fund_flow'] = True
-                ctx.data_quality_flags['fund_flow_source'] = source_name
-                ctx.big_order_net = fd.get("mainForce", 0) * 10000
-                ctx.big_order_ratio = (
-                    abs(ctx.big_order_net) / max(ctx.turnover, 1)
-                    if ctx.turnover > 0 else 0
-                )
-                ctx.active_buy_ratio = fd.get("active_buy_ratio", 50.0)
-                if fd.get("data_date", "") == today_str:
-                    today_count += 1
+            md = minute_data.get(ctx.code, {})
+            sd = sina_data.get(ctx.code, {})
+            hd = push2his_data.get(ctx.code, {})
 
-        # 仅当日数据有效，昨日数据视为无数据
+            # mainForce: 优先分钟线(实时) → 新浪 → push2his
+            main_force = None
+            flow_detail = {}
+            if md:
+                main_force = md.get("mainForce")
+                flow_detail = md
+                ctx.data_quality_flags['fund_flow_source'] = 'minute'
+            if main_force is None and sd:
+                main_force = sd.get("mainForce")
+                flow_detail = sd
+                ctx.data_quality_flags['fund_flow_source'] = 'sina'
+            if main_force is None and hd:
+                main_force = hd.get("mainForce")
+                flow_detail = hd
+                ctx.data_quality_flags['fund_flow_source'] = 'push2his'
+
+            if main_force is None:
+                continue
+
+            ctx.data_quality_flags['fund_flow'] = True
+            ctx.big_order_net = main_force * 10000
+            ctx.big_order_ratio = (
+                abs(ctx.big_order_net) / max(ctx.turnover, 1)
+                if ctx.turnover > 0 else 0
+            )
+
+            # active_buy_ratio: 始终从新浪取 (已修正为 r0_in/(r0_in+r0_out)*100)
+            # 新浪失败 → push2his 降级
+            ab_source = sd or hd
+            ctx.active_buy_ratio = ab_source.get("active_buy_ratio", 50.0)
+
+            # 日期验证: 分钟线或新浪有当日日期即算有效
+            dates = [d.get("data_date", "") for d in (md, sd, hd) if d]
+            if any(d == today_str for d in dates):
+                today_count += 1
+
         self.capital_data_date = "today" if today_count > 0 else "none"
         date_label = f"当日 {today_count} 只" if today_count else "无当日数据"
+        sources = []
+        if minute_data:
+            sources.append("分钟线")
+        if sina_data:
+            sources.append("新浪")
+        if push2his_data:
+            sources.append("push2his")
         logger.info(
-            f"资金流向: 获得 {len(flow_data)} 只有效数据 "
-            f"({date_label}, 来源: {source_name})"
+            f"资金流向: 富化 {today_count}/{len(enrich_candidates)} 只 "
+            f"({date_label}, 来源: {'+'.join(sources) if sources else 'none'})"
         )
         self._fund_flow_fetched = True
 

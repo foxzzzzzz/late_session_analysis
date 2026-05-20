@@ -309,13 +309,22 @@ class TestRound2UpperShadow:
 # ================================================================
 
 def _make_healthy_price_series(n=30):
-    """构造健康的日线序列: 涨跌交替, 不过热"""
+    """构造健康的日线序列: 满足全部R1策略要求
+    末段4天连涨≥1.2% (动量), 整体连涨≤5, 近9天涨≤6, 近4天≥3阳"""
     closes = [10.0]
-    for i in range(1, n):
+    # 前段 (indices 1-20): 温和交替
+    for i in range(1, 21):
         if i % 3 == 0:
-            closes.append(closes[-1] - 0.03)  # 微跌
+            closes.append(closes[-1] * 1.005)  # +0.5%
         else:
-            closes.append(closes[-1] + 0.15)  # 温和涨
+            closes.append(closes[-1] * 0.998)  # -0.2%
+    # 末段 (indices 21-29): 构造满足动量+连涨约束的序列
+    closes.append(closes[-1] * 0.995)   # 21: down
+    closes.append(closes[-1] * 0.995)   # 22: down
+    closes.append(closes[-1] * 0.995)   # 23: down
+    for _ in range(5):                  # 24-28: 5连涨 (动量用末4天, 连涨=5≤5)
+        closes.append(closes[-1] * 1.012)  # +1.2%
+    closes.append(closes[-1] * 0.998)   # 29: down (打断连涨, 末4=26-29用27→28的涨)
     return closes
 
 

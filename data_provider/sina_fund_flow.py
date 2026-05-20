@@ -10,7 +10,7 @@ API: vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssi_
   r1_in/r1_out:  中单 流入/流出 (元)
   r2_in/r2_out:  小单 流入/流出 (元)
   r3_in/r3_out:  散单 流入/流出 (元)
-  r0x_ratio:     主力占比 (%)
+  r0x_ratio:     主力净方向指标 (±95%，非主动买入比)
   netamount:     净流入总额 (元)
   name/trade/changeratio/volume/turnover/curr_capital
 
@@ -20,7 +20,7 @@ API: vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssi_
   retail = (r2_in - r2_out + r3_in - r3_out) / 10000
   super = 0  (新浪不拆分超大单/大单)
   large = 0
-  active_buy_ratio = r0x_ratio
+  active_buy_ratio = r0_in / (r0_in + r0_out) * 100  (主力主动买入占比)
 """
 import json
 import logging
@@ -112,7 +112,10 @@ class SinaFundFlowFetcher:
             main_force = (r0_in - r0_out) / 10000.0
             mid = (r1_in - r1_out) / 10000.0
             retail = (r2_in - r2_out + r3_in - r3_out) / 10000.0
-            active_buy = _sf(raw.get("r0x_ratio"))
+            # 主动买入比 = 主力主动买入 / (主力主动买入 + 主力主动卖出)
+            # r0x_ratio 是主力净方向指标(±95%)，不是主动买入比，不能直接用
+            r0_total = r0_in + r0_out
+            active_buy = (r0_in / r0_total * 100) if r0_total > 0 else 50.0
 
             return {
                 "mainForce": main_force,
@@ -121,6 +124,7 @@ class SinaFundFlowFetcher:
                 "large": 0.0,   # 新浪不拆分超大单/大单
                 "super": 0.0,
                 "active_buy_ratio": active_buy,
+                "netamount": _sf(raw.get("netamount")) / 10000.0,  # 净流入总额(万元)
                 "data_date": datetime.now().strftime("%Y-%m-%d"),
             }
         except Exception as e:

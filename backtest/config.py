@@ -66,6 +66,19 @@ class BacktestConfig(SystemConfig):
         self.l2_recovery_rise = float(os.getenv("BT_L2_RECOVERY_RISE", "1.0"))
         self.l2_active_buy_pct = float(os.getenv("BT_L2_ACTIVE_BUY_PCT", "50.0"))
 
+        # 回测专用 L2 最低保障
+        self.l2_min_pass = int(os.getenv("BT_L2_MIN_PASS", str(self.l2_min_pass)))
+
+        # 回测专用 K线 阈值 — 默认比实盘宽松 (回测单次快照 vs 实盘多次循环扫描)
+        self.kline_min_atr_pct = float(os.getenv("BT_KLINE_MIN_ATR_PCT", str(self.kline_min_atr_pct)))
+        self.kline_max_atr_pct = float(os.getenv("BT_KLINE_MAX_ATR_PCT", str(self.kline_max_atr_pct)))
+        self.kline_max_consecutive_up = int(os.getenv("BT_KLINE_MAX_CONSECUTIVE_UP", str(self.kline_max_consecutive_up)))
+        self.kline_max_up_in_9days = int(os.getenv("BT_KLINE_MAX_UP_IN_9DAYS", str(self.kline_max_up_in_9days)))
+        self.kline_max_single_day_pct = float(os.getenv("BT_KLINE_MAX_SINGLE_DAY_PCT", str(self.kline_max_single_day_pct)))
+        self.kline_min_yang_ratio_4d = float(os.getenv("BT_KLINE_MIN_YANG_RATIO_4D", "0.25"))
+        self.kline_min_consecutive_close_rise = int(os.getenv("BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE", "0"))
+        self.kline_min_close_rise_pct = float(os.getenv("BT_KLINE_MIN_CLOSE_RISE_PCT", "0.0"))
+
         # 回测专用 L4 推荐阈值 — 无资金流/LLM时评分偏低，需下调
         self.l4_strong_buy = float(os.getenv("BT_L4_STRONG_BUY", "35.0"))
         self.l4_buy = float(os.getenv("BT_L4_BUY", "25.0"))

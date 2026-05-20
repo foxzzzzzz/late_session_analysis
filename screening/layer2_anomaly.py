@@ -45,26 +45,61 @@ def screen_l2_anomaly(
 ) -> list:
     """L2 尾盘异动识别
 
-    一只股票只要命中 放量 + (价格形态 OR 资金流向 OR 盘口) 任一组合即通过
+    一只股票只要命中 放量 + 价格形态 + 资金流向 全部条件即通过
     """
     if config is None:
         config = L2Config()
 
     passed = []
+    # 诊断计数器 — 三个条件必须同时满足
+    diag = {"vol_fail": 0, "price_fail": 0, "capital_fail": 0,
+            "vol_pass": 0, "price_pass": 0, "capital_pass": 0}
+    # 采样值分布
+    vol_ratios = []
+    last5_pcts = []
+    late_changes = []
     for ctx in contexts:
-        ctx.l2_passed = _check_l2(ctx, config, has_depth_data, has_capital_data)
+        ctx.l2_passed, fail_reason = _check_l2(ctx, config, has_depth_data, has_capital_data)
+        if fail_reason:
+            for k in fail_reason:
+                diag[k] = diag.get(k, 0) + 1
+        else:
+            diag["vol_pass"] += 1
+            diag["price_pass"] += 1
+            diag["capital_pass"] += 1
+        vol_ratios.append(ctx.afternoon_volume_ratio)
+        last5_pcts.append(ctx.last_5min_volume_pct)
+        late_changes.append(ctx.late_price_change)
         if ctx.l2_passed:
-            # 标记异动类型
             _classify_anomaly(ctx, config)
             passed.append(ctx)
 
     logger.info(f"L2 异动: {len(contexts)} → {len(passed)} "
                 f"({len(passed) / max(len(contexts), 1) * 100:.1f}%)")
+    logger.info(f"L2 诊断: 量失败={diag['vol_fail']}, 价失败={diag['price_fail']}, "
+                f"资金失败={diag['capital_fail']} | "
+                f"量通过={diag['vol_pass']}, 价通过={diag['price_pass']}, 资金通过={diag['capital_pass']}")
+
+    # 值分布采样 (非零值)
+    def _pctls(vals, pcts):
+        clean = sorted([v for v in vals if v > 0])
+        if not clean:
+            return ["N/A"] * len(pcts)
+        return [f"{clean[int(len(clean) * p / 100)]:.2f}" for p in pcts]
+    if vol_ratios:
+        p = _pctls(vol_ratios, [50, 75, 90, 95])
+        logger.info(f"L2 分布 量比(p50/p75/p90/p95): {p[0]}/{p[1]}/{p[2]}/{p[3]}")
+        p = _pctls(last5_pcts, [50, 75, 90, 95])
+        logger.info(f"L2 分布 尾盘量占比: {p[0]}/{p[1]}/{p[2]}/{p[3]}")
+        p = _pctls([abs(v) for v in late_changes], [50, 75, 90, 95])
+        logger.info(f"L2 分布 尾盘涨幅|%|: {p[0]}/{p[1]}/{p[2]}/{p[3]}")
     return passed
 
 
-def _check_l2(ctx, cfg: L2Config, has_depth: bool, has_capital: bool) -> bool:
-    """检查单只股票是否通过L2"""
+def _check_l2(ctx, cfg: L2Config, has_depth: bool, has_capital: bool) -> tuple[bool, list[str]]:
+    """检查单只股票是否通过L2, 返回 (通过, 失败原因列表)"""
+    failures = []
+
     # 1. 尾盘放量 (必须满足其中一项)
     vol_ok = False
     if ctx.afternoon_volume_ratio >= cfg.volume_ratio_min:
@@ -73,7 +108,8 @@ def _check_l2(ctx, cfg: L2Config, has_depth: bool, has_capital: bool) -> bool:
         vol_ok = True
 
     if not vol_ok and cfg.require_volume:
-        return False
+        failures.append("vol_fail")
+        return False, failures
 
     # 2. 价格形态 (至少满足一项)
     price_ok = False
@@ -97,9 +133,10 @@ def _check_l2(ctx, cfg: L2Config, has_depth: bool, has_capital: bool) -> bool:
         ctx.anomaly_type = 'breakout'
 
     if not price_ok and cfg.require_price_pattern:
-        return False
+        failures.append("price_fail")
+        return False, failures
 
-    # 3. 资金流向 (可选,有数据才检查)
+    # 3. 资金流向 (有数据且要求检查时才查验)
     if has_capital and cfg.require_capital:
         capital_ok = True
         if ctx.big_order_net < cfg.big_order_net_min:
@@ -107,20 +144,23 @@ def _check_l2(ctx, cfg: L2Config, has_depth: bool, has_capital: bool) -> bool:
         if ctx.daily_avg_big_order_ratio > 0:
             if ctx.big_order_ratio < ctx.daily_avg_big_order_ratio * cfg.big_order_ratio_mult:
                 capital_ok = False
-        # 新浪资金流可能返回负值(主力净流出), 用绝对值判断
-        if abs(ctx.active_buy_ratio) < cfg.active_buy_ratio_min:
+        if ctx.active_buy_ratio < cfg.active_buy_ratio_min:
             capital_ok = False
         if not capital_ok:
-            return False
+            failures.append("capital_fail")
+            return False, failures
+    elif not has_capital:
+        # 无资金流向数据时不计入失败（pipeline 会通过最低保障机制处理）
+        pass
 
     # 4. 盘口 (可选)
     if has_depth and cfg.require_orderbook:
         if ctx.bid_vol <= ctx.ask_vol:
-            return False
+            return False, failures
         if ctx.cancel_rate > cfg.cancel_rate_max:
-            return False
+            return False, failures
 
-    return True
+    return True, []
 
 
 def _classify_anomaly(ctx, cfg: L2Config):

@@ -59,8 +59,13 @@ class BacktestEngine:
         self.l4_config = L4Config()
         self.kline_config = KlineConfig(
             min_atr_pct=self.config.kline_min_atr_pct,
+            max_atr_pct=self.config.kline_max_atr_pct,
             max_consecutive_up=self.config.kline_max_consecutive_up,
-            min_yang_body_pct=self.config.kline_min_yang_body_pct,
+            max_up_in_9days=self.config.kline_max_up_in_9days,
+            max_single_day_pct=self.config.kline_max_single_day_pct,
+            min_yang_ratio_4d=self.config.kline_min_yang_ratio_4d,
+            min_consecutive_close_rise=self.config.kline_min_consecutive_close_rise,
+            min_close_rise_pct=self.config.kline_min_close_rise_pct,
         )
 
     def run(self) -> dict:
@@ -221,6 +226,19 @@ class BacktestEngine:
             pass
         return {}
 
+    def _truncate_daily_bars(self, date_str: str) -> dict:
+        """截断日线数据到指定日期 (避免 lookahead bias)"""
+        result = {}
+        for code, df in self.daily_bars.items():
+            if df is None or df.empty:
+                continue
+            date_col = df.columns[0]
+            mask = df[date_col].astype(str).str.replace("-", "").str[:8] <= date_str
+            filtered = df[mask]
+            if not filtered.empty:
+                result[code] = filtered.reset_index(drop=True)
+        return result
+
     # ============================================================
     # S1: L1 + K线 (仅日线数据)
     # ============================================================
@@ -228,17 +246,37 @@ class BacktestEngine:
     def _run_s1_with_daily(self, snapshot: pd.DataFrame, date_str: str,
                            pre_close_map: dict[str, float]) -> list:
         """用日线数据创建 StockContext 并跑 S1"""
+        # 日线截断到当前回测日 (避免 lookahead bias)
+        daily_upto = self._truncate_daily_bars(date_str)
         adapter = HistoricalDataAdapter(
             self.config, self.sector_map, sector_perf={}, northbound={}
         )
         contexts = adapter.adapt_single_day(snapshot, date_str, bars_5min=None,
                                             pre_close_map=pre_close_map,
-                                            daily_bars=self.daily_bars)
+                                            daily_bars=daily_upto)
 
         # L1 准入
+        all_contexts = contexts
         contexts = screen_l1_access(contexts, self.l1_config)
-        # K线形态
-        contexts = screen_kline(contexts, self.kline_config)
+
+        # 诊断: 检查 L1 通过的 context 的 code 是否在 daily_upto 中
+        l1_passed_codes = {c.code for c in contexts}
+        daily_codes = set(daily_upto.keys())
+        missing_from_daily = l1_passed_codes - daily_codes
+        if missing_from_daily:
+            logger.warning(
+                f"[{date_str}] L1通过 {len(contexts)}只, 但 {len(missing_from_daily)}只 "
+                f"不在 daily_upto 中! 样例: {list(missing_from_daily)[:5]}"
+            )
+        logger.debug(
+            f"[{date_str}] S1诊断: total={len(all_contexts)} L1_pass={len(contexts)} "
+            f"daily_keys={len(daily_codes)} missing={len(missing_from_daily)} "
+            f"kline.yang={self.kline_config.min_yang_ratio_4d} "
+            f"kline.atr=[{self.kline_config.min_atr_pct},{self.kline_config.max_atr_pct}]"
+        )
+
+        # K线形态 (传入截断后的日线数据)
+        contexts = screen_kline(contexts, self.kline_config, daily_cache=daily_upto)
 
         # 过滤: L1通过 AND K线通过
         passed = [c for c in contexts if c.l1_passed and c.kline_passed]
@@ -270,21 +308,41 @@ class BacktestEngine:
         snapshot_filtered = snapshot[mask] if mask.any() else snapshot
 
         # 重建所有S1通过的context (带精确S2指标)
+        daily_upto = self._truncate_daily_bars(date_str)
         rebuilt = adapter.adapt_single_day(
             snapshot_filtered, date_str, bars_5min=bars_5min, pre_close_map=pre_close_map,
-            daily_bars=self.daily_bars,
+            daily_bars=daily_upto,
         )
         # 重新应用 L1 + K线
         rebuilt = screen_l1_access(rebuilt, self.l1_config)
-        rebuilt = screen_kline(rebuilt, self.kline_config)
+        rebuilt = screen_kline(rebuilt, self.kline_config, daily_cache=daily_upto)
         rebuilt = [c for c in rebuilt if c.l1_passed and c.kline_passed]
 
         # L2 异动检测 (使用精确S2指标)
+        has_capital = (self.config.capital_flow_mode != "none")
         passed = screen_l2_anomaly(
             rebuilt, self.l2_config,
             has_depth_data=False,
-            has_capital_data=(self.config.capital_flow_mode != "none"),
+            has_capital_data=has_capital,
         )
+
+        # 最低保障: 通过数不足时放宽资金条件重筛
+        min_pass = self.config.l2_min_pass
+        if len(passed) < min_pass and has_capital and self.l2_config.require_capital:
+            import dataclasses
+            relaxed = L2Config(**dataclasses.asdict(self.l2_config))
+            relaxed.require_capital = False
+            logger.warning(
+                f"[{date_str}] L2 最低保障: 仅通过 {len(passed)} 只 (<{min_pass}), "
+                f"放宽资金条件重筛 (量+价通过即可)"
+            )
+            passed = screen_l2_anomaly(
+                rebuilt, relaxed,
+                has_depth_data=False,
+                has_capital_data=False,
+            )
+            logger.info(f"[{date_str}] L2 放宽后: {len(passed)} 只通过")
+
         return passed
 
     # ============================================================

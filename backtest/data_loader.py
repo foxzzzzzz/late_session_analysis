@@ -155,8 +155,17 @@ class BacktestDataLoader:
     # ============================================================
 
     def load_daily_bars(self, codes: list[str], start_date: str, end_date: str) -> dict[str, pd.DataFrame]:
-        """加载指定股票的日线数据 (baostock数据源, 24/7可用)，按股票分别缓存为parquet"""
+        """加载指定股票的日线数据 (baostock数据源, 24/7可用)，按股票分别缓存为parquet
+
+        数据从 start_date 前 60 个自然日开始拉取，确保有足够的历史K线用于
+        ATR(14日)、MA20、阳线占比(4日)等指标计算。截断到回测日由引擎的
+        _truncate_daily_bars 处理，这里只负责加载充足的历史数据。
+        """
         import baostock as bs
+
+        # 历史数据起点: K线指标最长需要20日，取60自然日安全边际
+        fetch_start_ts = pd.Timestamp(start_date) - pd.Timedelta(days=60)
+        fetch_start = fetch_start_ts.strftime("%Y%m%d")
 
         result = {}
         bars_dir = os.path.join(self.cache_dir, "daily_bars")
@@ -170,7 +179,7 @@ class BacktestDataLoader:
                     cached = pd.read_parquet(cache_file)
                     if not cached.empty:
                         cached_dates = pd.to_datetime(cached.iloc[:, 0])
-                        need_start = pd.Timestamp(start_date)
+                        need_start = pd.Timestamp(fetch_start)
                         need_end = pd.Timestamp(end_date)
                         if cached_dates.min() <= need_start and cached_dates.max() >= need_end:
                             mask = (cached_dates >= need_start) & (cached_dates <= need_end)
@@ -181,10 +190,10 @@ class BacktestDataLoader:
             codes_to_fetch.append(code)
 
         if codes_to_fetch:
-            logger.info(f"日线需拉取(baostock): {len(codes_to_fetch)} 只股票")
-            start8 = str(start_date)[:8]
+            logger.info(f"日线需拉取(baostock): {len(codes_to_fetch)} 只股票 "
+                        f"(区间 {fetch_start}→{end_date})")
+            query_start = f"{fetch_start[:4]}-{fetch_start[4:6]}-{fetch_start[6:8]}"
             end8 = str(end_date)[:8]
-            query_start = f"{start8[:4]}-{start8[4:6]}-{start8[6:8]}"
             query_end = f"{end8[:4]}-{end8[4:6]}-{end8[6:8]}"
 
             bs.login()

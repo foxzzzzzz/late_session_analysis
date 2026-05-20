@@ -1,0 +1,11 @@
+{
+  "backtest_info": {
+    "total_days": 1,
+    "days_with_signals": 1
+  },
+  "performance": {
+    "total_trades": 0,
+    "message": "无有效交易记录"
+  },
+  "stratified": {}
+}

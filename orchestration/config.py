@@ -32,12 +32,14 @@ class SystemConfig:
     l1_min_price: float = 5.0
     l1_max_price: float = 100.0
 
-    l2_volume_ratio: float = 2.5       # 尾盘量比(相对上午), 1.5过于宽松 → 2.5
-    l2_last5min_vol_pct: float = 12.0  # 最后5分钟量占比(%)
+    l2_volume_ratio: float = 1.5       # 尾盘量比(相对上午)
+    l2_last5min_vol_pct: float = 8.0   # 最后5分钟量占比(%)
     l2_late_rally_pct: float = 3.0     # 尾盘拉升最低涨幅(%)
     l2_recovery_drop: float = 3.0
     l2_recovery_rise: float = 1.5
     l2_active_buy_pct: float = 55.0
+    l2_require_capital: bool = True    # 资金流向是否作为硬门槛 (false=仅评分使用)
+    l2_min_pass: int = 10              # L2 最低通过数，不足时自动放宽资金条件
 
     l3_sector_rank_top_pct: float = 30.0
     l3_min_history_win: float = 60.0
@@ -70,6 +72,9 @@ class SystemConfig:
     kline_max_consecutive_up: int = 5      # 最多连涨天数
     kline_max_up_in_9days: int = 6         # 近9天最多涨几天
     kline_max_single_day_pct: float = 6.5  # 单日涨幅上限(%)
+    kline_min_yang_ratio_4d: float = 0.75  # 近4天阳线占比最低 (3/4)
+    kline_min_consecutive_close_rise: int = 4  # 至少连续N天收盘上涨
+    kline_min_close_rise_pct: float = 0.5  # 连续上涨每天最低涨幅(%)
 
     # === 时间循环间隔 (秒) ===
     s1_loop_interval: int = 180   # S1 K线扫描: 每3分钟
@@ -122,6 +127,8 @@ class SystemConfig:
         self.l2_active_buy_pct = float(os.getenv("L2_ACTIVE_BUY_PCT", str(self.l2_active_buy_pct)))
         self.l2_recovery_drop = float(os.getenv("L2_LATE_RECOVERY_DROP", str(self.l2_recovery_drop)))
         self.l2_recovery_rise = float(os.getenv("L2_LATE_RECOVERY_RISE", str(self.l2_recovery_rise)))
+        self.l2_require_capital = os.getenv("L2_REQUIRE_CAPITAL", str(self.l2_require_capital)).lower() != "false"
+        self.l2_min_pass = int(os.getenv("L2_MIN_PASS", str(self.l2_min_pass)))
 
         self.l3_sector_rank_top_pct = float(os.getenv("L3_SECTOR_RANK_TOP", str(self.l3_sector_rank_top_pct)))
         self.l3_min_history_win = float(os.getenv("L3_HISTORY_WIN_RATE", str(self.l3_min_history_win)))
@@ -144,6 +151,9 @@ class SystemConfig:
         self.kline_max_consecutive_up = int(os.getenv("KLINE_MAX_CONSECUTIVE_UP", str(self.kline_max_consecutive_up)))
         self.kline_max_up_in_9days = int(os.getenv("KLINE_MAX_UP_IN_9DAYS", str(self.kline_max_up_in_9days)))
         self.kline_max_single_day_pct = float(os.getenv("KLINE_MAX_SINGLE_DAY_PCT", str(self.kline_max_single_day_pct)))
+        self.kline_min_yang_ratio_4d = float(os.getenv("KLINE_MIN_YANG_RATIO_4D", str(self.kline_min_yang_ratio_4d)))
+        self.kline_min_consecutive_close_rise = int(os.getenv("KLINE_MIN_CONSECUTIVE_CLOSE_RISE", str(self.kline_min_consecutive_close_rise)))
+        self.kline_min_close_rise_pct = float(os.getenv("KLINE_MIN_CLOSE_RISE_PCT", str(self.kline_min_close_rise_pct)))
 
         # 时间循环
         self.s1_loop_interval = int(os.getenv("S1_LOOP_INTERVAL", str(self.s1_loop_interval)))
@@ -176,6 +186,9 @@ class SystemConfig:
                 max_consecutive_up=self.kline_max_consecutive_up,
                 max_up_in_9days=self.kline_max_up_in_9days,
                 max_single_day_pct=self.kline_max_single_day_pct,
+                min_yang_ratio_4d=self.kline_min_yang_ratio_4d,
+                min_consecutive_close_rise=self.kline_min_consecutive_close_rise,
+                min_close_rise_pct=self.kline_min_close_rise_pct,
             ),
             'l2': L2Config(
                 volume_ratio_min=self.l2_volume_ratio,
@@ -184,6 +197,7 @@ class SystemConfig:
                 recovery_drop_min=self.l2_recovery_drop,
                 recovery_rise_min=self.l2_recovery_rise,
                 active_buy_ratio_min=self.l2_active_buy_pct,
+                require_capital=self.l2_require_capital,
             ),
             'l3': L3Config(
                 sector_rank_top_pct=self.l3_sector_rank_top_pct,
