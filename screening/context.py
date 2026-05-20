@@ -63,7 +63,11 @@ class StockContext:
     ma5: float = 0.0
     ma10: float = 0.0
     ma20: float = 0.0
+    ma30: float = 0.0
+    ma60: float = 0.0
     ma_alignment: str = ""              # bullish/bearish/neutral
+    ma5_accelerating: bool = False      # MA5 渐进加速
+    volume_shrinking: bool = False      # 连续3天缩量>10%
     position_20d: float = 0.0           # 近20日价格百分位
     near_key_level: bool = False        # 是否接近关键位置
     sector_performance: float = 0.0     # 板块涨跌幅

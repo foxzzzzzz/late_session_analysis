@@ -51,8 +51,7 @@ def main():
     print('=' * 60)
     hc = f.health_check()
     print(f'  push2his (当日实时): {"[OK] 可达" if hc["push2his"] else "[FAIL] 不可达"}')
-    print(f'  push2    (昨日降级): {"[OK] 可达" if hc["push2"] else "[FAIL] 不可达"}')
-    print(f'  综合: {"[OK] 至少一个通道可用" if hc["ok"] else "[FAIL] 双通道均不可达"}')
+    print(f'  综合: {"[OK] push2his通道可用" if hc["ok"] else "[FAIL] push2his不可达"}')
 
     if not hc['ok']:
         print('\n  结论: 资金流向API完全不可达，无需继续测试。')

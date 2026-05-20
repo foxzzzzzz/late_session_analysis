@@ -68,35 +68,41 @@ def make_trading_5min_timestamps(start_h=9, start_m=35, n_bars=48):
 
 class TestComputeMA:
     def test_normal_ma_calculation(self):
-        """标准MA5/MA10/MA20计算"""
+        """标准MA5/MA10/MA20/MA30/MA60计算"""
         closes = list(range(1, 31))  # 1..30
         df = make_daily_df([float(c) for c in closes])
-        ma5, ma10, ma20 = KlineProvider.compute_ma(df)
+        ma5, ma10, ma20, ma30, ma60 = KlineProvider.compute_ma(df)
         assert ma5 == pytest.approx(28.0)   # (26+27+28+29+30)/5
         assert ma10 == pytest.approx(25.5)  # (21+...+30)/10
         assert ma20 == pytest.approx(20.5)  # (11+...+30)/20
+        assert ma30 == pytest.approx(15.5)  # (1+...+30)/30
+        assert ma60 == pytest.approx(15.5)  # fallback到MA30 (<60条)
 
     def test_insufficient_data(self):
         """数据不足5条时返回0"""
         df = make_daily_df([10.0, 11.0, 12.0])
-        ma5, ma10, ma20 = KlineProvider.compute_ma(df)
+        ma5, ma10, ma20, ma30, ma60 = KlineProvider.compute_ma(df)
         assert ma5 == 0.0
         assert ma10 == 0.0
         assert ma20 == 0.0
+        assert ma30 == 0.0
+        assert ma60 == 0.0
 
     def test_empty_dataframe(self):
         df = pd.DataFrame()
-        ma5, ma10, ma20 = KlineProvider.compute_ma(df)
+        ma5, ma10, ma20, ma30, ma60 = KlineProvider.compute_ma(df)
         assert ma5 == 0.0
 
     def test_partial_data_ma10_fallback(self):
-        """6-9条数据: MA10 fallback到MA5"""
+        """6-9条数据: MA10 fallback到MA5, MA30/MA60 fallback到MA20"""
         closes = [float(c) for c in range(1, 8)]  # 7条
         df = make_daily_df(closes)
-        ma5, ma10, ma20 = KlineProvider.compute_ma(df)
+        ma5, ma10, ma20, ma30, ma60 = KlineProvider.compute_ma(df)
         assert ma5 == pytest.approx(5.0)    # (3+4+5+6+7)/5
         assert ma10 == pytest.approx(5.0)   # fallback到MA5
         assert ma20 == pytest.approx(5.0)   # fallback到MA10(=MA5)
+        assert ma30 == pytest.approx(5.0)   # fallback到MA20(=MA10)
+        assert ma60 == pytest.approx(5.0)   # fallback到MA30(=MA20)
 
 
 # ================================================================

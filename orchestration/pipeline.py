@@ -208,6 +208,8 @@ class LateSessionPipeline:
                                 'ma5': KlineProvider.compute_ma(df)[0],
                                 'ma10': KlineProvider.compute_ma(df)[1],
                                 'ma20': KlineProvider.compute_ma(df)[2],
+                                'ma30': KlineProvider.compute_ma(df)[3],
+                                'ma60': KlineProvider.compute_ma(df)[4],
                                 'volatility': KlineProvider.compute_volatility(df),
                                 'atr': KlineProvider.compute_atr(df),
                             }
@@ -299,10 +301,21 @@ class LateSessionPipeline:
                 ctx.ma5 = dm['ma5']
                 ctx.ma10 = dm['ma10']
                 ctx.ma20 = dm['ma20']
+                ctx.ma30 = dm.get('ma30', 0.0)
+                ctx.ma60 = dm.get('ma60', 0.0)
                 ctx.volatility = dm['volatility']
                 ctx.data_quality_flags['daily_kline'] = True
                 ctx.data_quality_flags['ma_calculated'] = True
                 ctx.data_quality_flags['volatility_calculated'] = True
+
+                # MA5 渐进加速
+                if ctx.code in self._daily_cache:
+                    ctx.ma5_accelerating = KlineProvider.compute_ma5_acceleration(
+                        self._daily_cache[ctx.code]
+                    )
+                    ctx.volume_shrinking = KlineProvider.check_volume_shrink(
+                        self._daily_cache[ctx.code]
+                    )
 
             # === 5分钟线尾盘指标 ===
             fm = self._5min_metrics.get(ctx.code)
@@ -365,9 +378,19 @@ class LateSessionPipeline:
                     )
                     ctx.history_win_rate = wins / len(recent) * 100
 
-            # === 接近关键价位 (MA20 ±2%) ===
-            if ctx.ma20 > 0 and ctx.price > 0:
-                if abs(ctx.price - ctx.ma20) / ctx.ma20 * 100 <= 2.0:
+            # === 接近关键价位 (整数关口/均线) ===
+            if ctx.price > 0:
+                # 整数关口 ±1%: 10/20/50/100/200/500
+                round_levels = [10, 20, 50, 100, 200, 500]
+                for rl in round_levels:
+                    if abs(ctx.price - rl) / rl <= 0.01:
+                        ctx.near_key_level = True
+                        break
+                # MA20 ±2%
+                if ctx.ma20 > 0 and abs(ctx.price - ctx.ma20) / ctx.ma20 * 100 <= 2.0:
+                    ctx.near_key_level = True
+                # MA60 ±2%
+                if ctx.ma60 > 0 and abs(ctx.price - ctx.ma60) / ctx.ma60 * 100 <= 2.0:
                     ctx.near_key_level = True
 
             # === 板块排名百分位 ===

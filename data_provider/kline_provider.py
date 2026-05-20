@@ -120,25 +120,27 @@ class KlineProvider:
     # ================================================================
 
     @staticmethod
-    def compute_ma(df: pd.DataFrame) -> tuple[float, float, float]:
-        """从日线DataFrame计算 MA5, MA10, MA20
+    def compute_ma(df: pd.DataFrame) -> tuple[float, float, float, float, float]:
+        """从日线DataFrame计算 MA5, MA10, MA20, MA30, MA60
 
         Args:
             df: 日线DataFrame，需含 'close' 列，按时间升序排列
 
         Returns:
-            (ma5, ma10, ma20) 或 (0, 0, 0) 数据不足时
+            (ma5, ma10, ma20, ma30, ma60)
         """
         if df is None or df.empty:
-            return 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0, 0.0
         close = pd.to_numeric(df["close"], errors="coerce").dropna()
         n = len(close)
         if n < 5:
-            return 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0, 0.0
         ma5 = float(close.iloc[-5:].mean())
         ma10 = float(close.iloc[-10:].mean()) if n >= 10 else ma5
         ma20 = float(close.iloc[-20:].mean()) if n >= 20 else ma10
-        return ma5, ma10, ma20
+        ma30 = float(close.iloc[-30:].mean()) if n >= 30 else ma20
+        ma60 = float(close.iloc[-60:].mean()) if n >= 60 else ma30
+        return ma5, ma10, ma20, ma30, ma60
 
     @staticmethod
     def compute_volatility(df: pd.DataFrame, window: int = 20) -> float:
@@ -190,6 +192,66 @@ class KlineProvider:
         if len(tr) < window:
             return float(tr.mean())
         return float(tr.iloc[-window:].mean())
+
+    @staticmethod
+    def compute_ma5_acceleration(df: pd.DataFrame) -> bool:
+        """检查 MA5 是否渐进加速 — 最近2日 MA5 日变化率均为正且 ≥ 0.1%
+
+        策略要求: MA5渐进加速（0.4%→0.2%→0.1%），即MA5每日增长率逐步提升。
+        最低要求: 最近1日 MA5 增长率 ≥ 0.1%。
+
+        Args:
+            df: 日线DataFrame，需含 'close' 列，按时间升序排列
+
+        Returns:
+            True 如果 MA5 处于加速上升状态
+        """
+        if df is None or df.empty:
+            return False
+        close = pd.to_numeric(df["close"], errors="coerce").dropna()
+        if len(close) < 8:  # 需要至少 5+3 个数据点
+            return False
+
+        # 最近3个交易日的 MA5 值 (每个窗口后移一位)
+        ma5_latest = float(close.iloc[-5:].mean())
+        ma5_prev1 = float(close.iloc[-6:-1].mean())
+        ma5_prev2 = float(close.iloc[-7:-2].mean())
+
+        if ma5_prev1 <= 0 or ma5_prev2 <= 0:
+            return False
+
+        # 日变化率 (%)
+        rate1 = (ma5_latest - ma5_prev1) / ma5_prev1 * 100  # 最新
+        rate2 = (ma5_prev1 - ma5_prev2) / ma5_prev2 * 100  # 前一日
+
+        # 两日均正增长，最新日 ≥ 0.1%
+        return rate1 >= 0.1 and rate2 >= 0.05
+
+    @staticmethod
+    def check_volume_shrink(df: pd.DataFrame) -> bool:
+        """检查最近3个交易日是否连续缩量 (>10% per day)
+
+        策略要求: 不允许连续3天缩量>10%
+
+        Args:
+            df: 日线DataFrame，需含 'volume' 列，按时间升序排列
+
+        Returns:
+            True 如果连续3天缩量 (不合格)
+        """
+        if df is None or df.empty:
+            return False
+        if "volume" not in df.columns and "vol" not in df.columns:
+            return False
+        vol_col = "volume" if "volume" in df.columns else "vol"
+        vol = pd.to_numeric(df[vol_col], errors="coerce").dropna()
+        if len(vol) < 4:
+            return False
+        v1, v2, v3 = float(vol.iloc[-1]), float(vol.iloc[-2]), float(vol.iloc[-3])
+        if v1 <= 0 or v2 <= 0 or v3 <= 0:
+            return False
+        # 每步缩量 > 10%: v2 < v3*0.9 AND v1 < v2*0.9
+        return v2 < v3 * 0.9 and v1 < v2 * 0.9
 
     # ================================================================
     # 5分钟线尾盘指标 (静态方法)

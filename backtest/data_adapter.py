@@ -150,10 +150,12 @@ class HistoricalDataAdapter:
         df_daily = daily_bars.get(code) if daily_bars else None
         if df_daily is not None and not df_daily.empty:
             from data_provider.kline_provider import KlineProvider
-            ma5, ma10, ma20 = KlineProvider.compute_ma(df_daily)
+            ma5, ma10, ma20, ma30, ma60 = KlineProvider.compute_ma(df_daily)
             ctx.ma5 = ma5
             ctx.ma10 = ma10
             ctx.ma20 = ma20
+            ctx.ma30 = ma30
+            ctx.ma60 = ma60
             ctx.volatility = KlineProvider.compute_volatility(df_daily)
         # 无日线数据时 MA/波动率保持为 0 (L3 会将其标记为数据缺失)
 

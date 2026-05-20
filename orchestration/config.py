@@ -43,6 +43,10 @@ class SystemConfig:
 
     l3_sector_rank_top_pct: float = 30.0
     l3_min_history_win: float = 60.0
+    l3_vol_ratio_min: float = 1.3       # 量比下限 (近4天量比 1.3~1.8)
+    l3_vol_ratio_max: float = 1.8       # 量比上限
+    l3_ma5_close_ratio_min: float = 1.0  # 收盘/MA5 最低比率
+    l3_ma5_low_ratio_min: float = 0.98   # 最低价/MA5 最低比率
 
     l4_high_threshold: float = 75.0
     l4_medium_threshold: float = 60.0
@@ -132,6 +136,10 @@ class SystemConfig:
 
         self.l3_sector_rank_top_pct = float(os.getenv("L3_SECTOR_RANK_TOP", str(self.l3_sector_rank_top_pct)))
         self.l3_min_history_win = float(os.getenv("L3_HISTORY_WIN_RATE", str(self.l3_min_history_win)))
+        self.l3_vol_ratio_min = float(os.getenv("L3_VOL_RATIO_MIN", str(self.l3_vol_ratio_min)))
+        self.l3_vol_ratio_max = float(os.getenv("L3_VOL_RATIO_MAX", str(self.l3_vol_ratio_max)))
+        self.l3_ma5_close_ratio_min = float(os.getenv("L3_MA5_CLOSE_RATIO_MIN", str(self.l3_ma5_close_ratio_min)))
+        self.l3_ma5_low_ratio_min = float(os.getenv("L3_MA5_LOW_RATIO_MIN", str(self.l3_ma5_low_ratio_min)))
 
         report_dir = os.getenv("REPORT_OUTPUT_DIR", "")
         if report_dir:
@@ -202,6 +210,10 @@ class SystemConfig:
             'l3': L3Config(
                 sector_rank_top_pct=self.l3_sector_rank_top_pct,
                 min_history_win_rate=self.l3_min_history_win,
+                vol_ratio_min=self.l3_vol_ratio_min,
+                vol_ratio_max=self.l3_vol_ratio_max,
+                ma5_close_ratio_min=self.l3_ma5_close_ratio_min,
+                ma5_low_ratio_min=self.l3_ma5_low_ratio_min,
             ),
             'l4': L4Config(
                 high_attention_threshold=self.l4_high_threshold,
