@@ -113,8 +113,8 @@ class EfinanceFetcher(BaseFetcher):
         mapping = {}
 
         candidates = {
-            '代码': ['代码', 'code', 'symbol'],
-            '名称': ['名称', 'name', 'stock_name'],
+            '代码': ['代码', 'code', 'symbol', '股票代码'],
+            '名称': ['名称', 'name', 'stock_name', '股票名称'],
             '最新价': ['最新价', 'price', '最新价格'],
             '涨跌幅': ['涨跌幅', 'change_pct', 'change_percent', '涨跌%'],
             '成交额': ['成交额', 'turnover', '成交金额'],

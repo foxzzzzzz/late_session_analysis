@@ -6,7 +6,7 @@ Round 1 (14:30) 基础过滤 — 不合格直接淘汰:
   1. ATR/Close in 2.5%~8.5% (波动率适中)
   2. 连涨≤5天 (不过热)
   3. 近9天涨≤6天 (节奏健康)
-  4. 近4天≥3阳+今日阳 (阳线质量)
+  4. 近4天≥3阳 (阳线质量)
   5. 连续收盘涨 (近期有持续上升动力)
   6. 单日涨幅<6.5% (非暴涨)
   7. 单日涨幅<2倍ATR (涨幅相对波幅合理)
@@ -255,7 +255,7 @@ def _check_up_frequency(ctx: StockContext, cfg: KlineConfig, df: pd.DataFrame) -
 
 
 def _check_yang_ratio(ctx: StockContext, cfg: KlineConfig, df: pd.DataFrame) -> bool:
-    """近4天至少3天阳线 + 今日阳线"""
+    """近4天至少3天阳线"""
     open_p = pd.to_numeric(df["open"], errors="coerce")
     close = pd.to_numeric(df["close"], errors="coerce")
     if len(close) < 5:
@@ -266,14 +266,7 @@ def _check_yang_ratio(ctx: StockContext, cfg: KlineConfig, df: pd.DataFrame) -> 
     recent_close = close.iloc[-5:-1]
     yang_days = sum(1 for o, c in zip(recent_open, recent_close) if c > o)
     min_yang = int(cfg.min_yang_ratio_4d * 4)
-    if yang_days < min_yang:
-        return False
-
-    # 今日为阳线 (用实时数据)
-    if ctx.change_pct <= 0:
-        return False
-
-    return True
+    return yang_days >= min_yang
 
 
 def _check_close_momentum(ctx: StockContext, cfg: KlineConfig, df: pd.DataFrame) -> bool:

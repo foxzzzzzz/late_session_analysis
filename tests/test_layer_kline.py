@@ -129,7 +129,7 @@ class TestRound1UpFrequency:
 
 class TestRound1YangRatio:
     def test_enough_yang_days_passes(self):
-        """近4天有足够阳线 + 今日阳 → 通过"""
+        """近4天有足够阳线 → 通过 (不要求当日阳线)"""
         closes = [10.0, 10.5, 10.2, 10.8, 10.3, 11.0]  # 最近4完成: 10.0→10.5↑, 10.5→10.2↓, 10.2→10.8↑, 10.8→10.3↓
         opens = [9.9, 10.4, 10.3, 10.1, 10.7, 10.2]
         df = make_daily_df(closes, opens=opens)
@@ -137,14 +137,14 @@ class TestRound1YangRatio:
         cfg = KlineConfig(min_yang_ratio_4d=0.25)  # 只要1/4
         assert _check_yang_ratio(ctx, cfg, df)
 
-    def test_today_not_yang_fails(self):
-        """今日非阳线(跌) → 不通过"""
+    def test_today_not_yang_still_passes(self):
+        """今日阴线但历史阳线够 → 通过 (当日方向不硬淘汰)"""
         closes = [10.0, 10.5, 10.3, 10.8, 10.2, 11.0]
         opens = [9.9, 10.4, 10.2, 10.7, 10.1, 10.9]
         df = make_daily_df(closes, opens=opens)
         ctx = make_ctx(change_pct=-1.0)  # 今日阴
         cfg = KlineConfig(min_yang_ratio_4d=0.25)
-        assert not _check_yang_ratio(ctx, cfg, df)
+        assert _check_yang_ratio(ctx, cfg, df)
 
     def test_insufficient_yang_history_fails(self):
         """近4天阳线不够 → 不通过"""
