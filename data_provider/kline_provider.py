@@ -253,6 +253,70 @@ class KlineProvider:
         # 每步缩量 > 10%: v2 < v3*0.9 AND v1 < v2*0.9
         return v2 < v3 * 0.9 and v1 < v2 * 0.9
 
+    @staticmethod
+    def count_yang_days_4(df: pd.DataFrame) -> int:
+        """统计近4个交易日阳线天数 (close > open)
+
+        Returns: 0-4，数据不足时返回0
+        """
+        if df is None or df.empty:
+            return 0
+        try:
+            open_p = pd.to_numeric(df["open"], errors="coerce")
+            close = pd.to_numeric(df["close"], errors="coerce")
+            if len(close) < 5:
+                return 0
+            recent_open = open_p.iloc[-5:-1]
+            recent_close = close.iloc[-5:-1]
+            return sum(1 for o, c in zip(recent_open, recent_close) if c > o)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def check_body_amplifying(df: pd.DataFrame) -> bool:
+        """检查近3个交易日实体是否逐日放大
+
+        实体 = |close - open|，要求每天实体 ≥ 前一天的 1.05 倍
+        (允许一定波动，只要趋势是放大的)
+        """
+        if df is None or df.empty:
+            return False
+        try:
+            open_p = pd.to_numeric(df["open"], errors="coerce")
+            close = pd.to_numeric(df["close"], errors="coerce")
+            if len(close) < 4:
+                return False
+            bodies = []
+            for i in range(-3, 0):
+                bodies.append(abs(close.iloc[i] - open_p.iloc[i]))
+            if any(b <= 0 for b in bodies):
+                return False
+            return bodies[1] >= bodies[0] * 0.95 and bodies[2] >= bodies[1] * 0.95
+        except Exception:
+            return False
+
+    @staticmethod
+    def compute_consecutive_close_rise(df: pd.DataFrame) -> int:
+        """计算连续收盘上涨天数 (从最近一天往前数)
+
+        Returns: 连续天数 (0-?), 包含今天
+        """
+        if df is None or df.empty:
+            return 0
+        try:
+            close = pd.to_numeric(df["close"], errors="coerce")
+            if len(close) < 3:
+                return 0
+            count = 0
+            for i in range(len(close) - 1, 0, -1):
+                if close.iloc[i] > close.iloc[i - 1]:
+                    count += 1
+                else:
+                    break
+            return count
+        except Exception:
+            return 0
+
     # ================================================================
     # 5分钟线尾盘指标 (静态方法)
     # ================================================================

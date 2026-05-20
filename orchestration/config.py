@@ -48,8 +48,9 @@ class SystemConfig:
     l3_ma5_close_ratio_min: float = 1.0  # 收盘/MA5 最低比率
     l3_ma5_low_ratio_min: float = 0.98   # 最低价/MA5 最低比率
 
-    l4_high_threshold: float = 75.0
-    l4_medium_threshold: float = 60.0
+    l4_high_threshold: float = 85.0    # strong_buy (超强信号, 策略 >85)
+    l4_medium_threshold: float = 60.0   # watch 下限
+    l4_buy_threshold: float = 75.0      # buy (强信号, 策略 75-85)
 
     # === 报告 ===
     report_output_dir: str = "./reports"
@@ -218,5 +219,6 @@ class SystemConfig:
             'l4': L4Config(
                 high_attention_threshold=self.l4_high_threshold,
                 medium_attention_threshold=self.l4_medium_threshold,
+                buy_threshold=self.l4_buy_threshold,
             ),
         }

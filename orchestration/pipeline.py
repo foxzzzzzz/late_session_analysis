@@ -216,6 +216,9 @@ class LateSessionPipeline:
                                 'ma60': KlineProvider.compute_ma(df)[4],
                                 'volatility': KlineProvider.compute_volatility(df),
                                 'atr': KlineProvider.compute_atr(df),
+                                'yang_days_4': KlineProvider.count_yang_days_4(df),
+                                'body_amplifying': KlineProvider.check_body_amplifying(df),
+                                'consecutive_close_rise': KlineProvider.compute_consecutive_close_rise(df),
                             }
                     logger.info(f"日线指标计算完成: {len(self._daily_metrics)} 只")
             else:
@@ -308,6 +311,9 @@ class LateSessionPipeline:
                 ctx.ma30 = dm.get('ma30', 0.0)
                 ctx.ma60 = dm.get('ma60', 0.0)
                 ctx.volatility = dm['volatility']
+                ctx.yang_days_4 = dm.get('yang_days_4', 0)
+                ctx.body_amplifying = dm.get('body_amplifying', False)
+                ctx.consecutive_close_rise = dm.get('consecutive_close_rise', 0)
                 ctx.data_quality_flags['daily_kline'] = True
                 ctx.data_quality_flags['ma_calculated'] = True
                 ctx.data_quality_flags['volatility_calculated'] = True
@@ -861,7 +867,14 @@ class LateSessionPipeline:
                 self._llm_done = True
 
             llm_results = getattr(self, '_llm_results', {})
-            top30 = merge_and_rank(top30, llm_results)
+            # 对齐策略阈值: >85 strong_buy, 75-85 buy, 60-75 watch
+            # 无LLM时 rule_weight=1.0 → final_score=total_score 直接对齐
+            if self.llm_runner:
+                top30 = merge_and_rank(top30, llm_results, rule_weight=0.7,
+                    strong_buy_threshold=80, buy_threshold=72, watch_threshold=55)
+            else:
+                top30 = merge_and_rank(top30, llm_results, rule_weight=1.0,
+                    strong_buy_threshold=85, buy_threshold=75, watch_threshold=60)
 
             if not self._sleep_or_break("14:58", loop_interval):
                 break

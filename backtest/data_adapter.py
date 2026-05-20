@@ -157,6 +157,11 @@ class HistoricalDataAdapter:
             ctx.ma30 = ma30
             ctx.ma60 = ma60
             ctx.volatility = KlineProvider.compute_volatility(df_daily)
+            ctx.yang_days_4 = KlineProvider.count_yang_days_4(df_daily)
+            ctx.body_amplifying = KlineProvider.check_body_amplifying(df_daily)
+            ctx.consecutive_close_rise = KlineProvider.compute_consecutive_close_rise(df_daily)
+            ctx.ma5_accelerating = KlineProvider.compute_ma5_acceleration(df_daily)
+            ctx.volume_shrinking = KlineProvider.check_volume_shrink(df_daily)
         # 无日线数据时 MA/波动率保持为 0 (L3 会将其标记为数据缺失)
 
         return ctx

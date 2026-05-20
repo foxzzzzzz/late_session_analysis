@@ -76,6 +76,9 @@ class StockContext:
     leader_strength: bool = False
     volatility: float = 0.0             # 近期波动率
     consecutive_limit_ups: int = 0      # 连续涨停天数
+    yang_days_4: int = 0               # 近4天阳线天数 (0-4, B维度K线形态用)
+    body_amplifying: bool = False      # 近3天实体逐日放大 (B维度K线形态用)
+    consecutive_close_rise: int = 0    # 连续收盘上涨天数 (B维度涨幅稳定性用)
     has_bad_news: bool = False          # 近3日有无利空
     is_unlock_date: bool = False        # 是否解禁日
     history_win_rate: float = 0.0       # 近5日相似形态次日胜率
