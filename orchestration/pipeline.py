@@ -26,6 +26,7 @@ from data_provider.northbound_fetcher import get_northbound_sentiment
 from data_provider.concept_analyzer import get_concept_analyzer
 from data_provider.kline_provider import KlineProvider
 from data_provider.board_utils import get_limit_pct
+from data_provider.news_fetcher import NewsFetcher
 from screening.context import StockContext
 from screening.funnel import FunnelPipeline, FunnelConfig
 from screening.cache import StockMetricsCache
@@ -79,6 +80,9 @@ class LateSessionPipeline:
 
         # 北向资金情绪 (S3阶段获取)
         self.northbound_sentiment: Optional[dict] = None
+
+        # 利空公告检测 (S3阶段, 东方财富公告API)
+        self.news_fetcher = NewsFetcher(lookback_days=3)
 
         # 资金流向数据日期 (today/yesterday/none)
         self.capital_data_date: str = "none"
@@ -419,6 +423,104 @@ class LateSessionPipeline:
                     ctx.active_buy_ratio = fd.get("active_buy_ratio", 50.0)
                     ctx.data_quality_flags['fund_flow'] = True
 
+    def _enrich_bad_news(self, contexts: list[StockContext]):
+        """S3阶段: 利空公告排查 (东方财富公告API)
+
+        对每只股票查询近3日公告标题，匹配利空关键词。
+        API限流: 每请求 ≥ 0.5s
+        """
+        checked = 0
+        bad_count = 0
+        for ctx in contexts:
+            # 跳过已有解禁标记的股票（已排除）
+            if ctx.is_unlock_date:
+                continue
+            try:
+                ctx.has_bad_news = self.news_fetcher.check_bad_news(ctx.code)
+                checked += 1
+                if ctx.has_bad_news:
+                    bad_count += 1
+            except Exception as e:
+                logger.debug(f"利空公告查询失败 [{ctx.code}]: {e}")
+
+        if checked > 0:
+            logger.info(
+                f"利空排查: 检查 {checked} 只, "
+                f"发现 {bad_count} 只有利空公告"
+            )
+
+    def _enrich_leader_strength(
+        self,
+        contexts: list[StockContext],
+        sector_codes: dict[str, list[str]],
+    ):
+        """S3阶段: 板块内排名 → 龙头效应增强
+
+        在当前pipeline contexts中，按板块计算每只股票的：
+          - 市值排名百分位 (top 30% → 龙头)
+          - 涨幅排名百分位 (top 20% → 龙头)
+          - 成交额排名百分位 (top 25% → 龙头)
+
+        满足任一条件即视为板块龙头。
+        不依赖额外API调用，使用contexts中已有的实时数据。
+        """
+        if not sector_codes:
+            return
+
+        # 按板块分组当前contexts
+        sector_contexts: dict[str, list[StockContext]] = {}
+        for ctx in contexts:
+            sec = ctx.sector or self._s0_sector_map.get(ctx.code, '')
+            if sec:
+                sector_contexts.setdefault(sec, []).append(ctx)
+
+        leader_count = 0
+        for sec, members in sector_contexts.items():
+            if len(members) < 3:
+                # 板块样本太少，统一标记为非龙头
+                continue
+
+            # 市值排名 (非零值参与排名)
+            caps = [(c, c.market_cap) for c in members if c.market_cap > 0]
+            caps_sorted = sorted(caps, key=lambda x: x[1], reverse=True)
+            cap_ranks = {
+                c.code: (i + 1) / len(caps_sorted) * 100
+                for i, (c, _) in enumerate(caps_sorted)
+            }
+
+            # 涨幅排名
+            changes_sorted = sorted(members, key=lambda c: c.change_pct, reverse=True)
+            change_ranks = {
+                c.code: (i + 1) / len(changes_sorted) * 100
+                for i, c in enumerate(changes_sorted)
+            }
+
+            # 成交额排名
+            turns_sorted = sorted(
+                [c for c in members if c.turnover > 0],
+                key=lambda c: c.turnover, reverse=True,
+            )
+            turnover_ranks = {
+                c.code: (i + 1) / len(turns_sorted) * 100
+                for i, c in enumerate(turns_sorted)
+            }
+
+            # 判定: 任一维度进入前列即为龙头
+            for ctx in members:
+                if ctx.leader_strength:
+                    continue  # 已通过题材热度认定为龙头，保留
+
+                cap_r = cap_ranks.get(ctx.code, 100)
+                chg_r = change_ranks.get(ctx.code, 100)
+                to_r = turnover_ranks.get(ctx.code, 100)
+
+                if cap_r <= 30 or chg_r <= 20 or to_r <= 25:
+                    ctx.leader_strength = True
+                    leader_count += 1
+
+        if leader_count > 0:
+            logger.info(f"龙头效应: {leader_count} 只认定为板块龙头")
+
     # ============================================================
     # S0: 板块预筛选
     # ============================================================
@@ -669,12 +771,17 @@ class LateSessionPipeline:
     # ============================================================
 
     def _run_stage3(self, contexts: list[StockContext]) -> tuple:
-        """S3: 均线验证 + 北向情绪 + L4评分"""
+        """S3: 均线验证 + 利空排查 + 龙头效应 + 北向情绪 + L4评分"""
         self.tracker.stage_start("S3_均线验证", len(contexts))
 
         loop_interval = self.config.s3_loop_interval
         iteration = 0
         scored: list[StockContext] = []
+
+        # S0板块→成分股反向映射 (用于板块内排名)
+        sector_codes: dict[str, list[str]] = {}
+        for code, sec in self._s0_sector_map.items():
+            sector_codes.setdefault(sec, []).append(code)
 
         while True:
             iteration += 1
@@ -684,6 +791,13 @@ class LateSessionPipeline:
             codes = [c.code for c in contexts]
             contexts = self._fetch_and_convert(codes)
             self._enrich_contexts(contexts)  # Tencent 近似在此处执行
+
+            # 利空公告排查 (首轮, API调用有成本)
+            if iteration == 1:
+                self._enrich_bad_news(contexts)
+
+            # 板块内排名 → 龙头效应增强
+            self._enrich_leader_strength(contexts, sector_codes)
 
             # L3 技术面验证
             from screening.layer3_technical import screen_l3_technical
