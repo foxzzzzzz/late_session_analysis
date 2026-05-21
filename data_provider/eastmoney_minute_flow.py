@@ -4,10 +4,13 @@ push2 fflow/kline klt=1 是唯一已知的盘中实时资金流数据源，分�
 与 push2his 日线(klt=101)不同，分钟线在交易时段返回今日实时数据。
 
 API: push2.eastmoney.com/api/qt/stock/fflow/kline/get
-参数: secid={market}.{code}, klt=1 (1分钟), lmt=1 (最新1条)
+参数: secid={market}.{code}, klt=1 (1分钟), lmt=1 (最新1条),
+      fields1=f1,f2,f3,f7, fields2=f51..f61 (必须显式指定，否则返回 rc=102)
 
-返回字段 (逗号分隔): 时间戳, 主力净额, 散户净额, 中单净额, 超大单净额, 大单净额
-注意: 无 active_buy_ratio 字段 (日线衍生指标，分钟线不提供)
+返回字段 (逗号分隔): 时间戳, 主力净额(f52), 散户净额(f53), 中单净额(f54),
+                    大单净额(f55), 超大单净额(f56)
+字段映射: parts[4]=large(f55), parts[5]=super(f56) — 与 push2his 日线一致
+注意: 无 active_buy_ratio 字段 (f57 分钟线返回空，需从新浪获取)
 
 需要 urllib (非 requests)，东财对 push2 封禁 requests UA。
 """
@@ -25,6 +28,8 @@ logger = logging.getLogger(__name__)
 _PUSH2_FFLOW_API = (
     "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
     "?secid={secid}&klt=1&lmt=1"
+    "&fields1=f1,f2,f3,f7"
+    "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
 )
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/117.0.0.0 Safari/537.36"
@@ -102,8 +107,8 @@ class EastmoneyMinuteFlowFetcher:
                 "mainForce": _sf(parts[1]) / 10000.0,
                 "retail": _sf(parts[2]) / 10000.0,
                 "mid": _sf(parts[3]) / 10000.0,
-                "super": _sf(parts[4]) / 10000.0,
-                "large": _sf(parts[5]) / 10000.0,
+                "large": _sf(parts[4]) / 10000.0,
+                "super": _sf(parts[5]) / 10000.0,
                 "data_date": datetime.now().strftime("%Y-%m-%d"),
             }
 
