@@ -37,7 +37,7 @@ class StockContext:
     morning_volume: float = 0.0         # 上午成交量
     last_5min_volume: float = 0.0       # 最后5分钟成交量
     avg_period_volume: float = 0.0      # 全天时段均量
-    afternoon_volume_ratio: float = 0.0 # 午后量比 (afternoon/morning)
+    late_volume_ratio: float = 0.0     # 尾盘量比 (14:30后 / 13:00-14:30)
     last_5min_volume_pct: float = 0.0   # 最后5分钟占比
     l1_passed: Optional[bool] = None    # L1是否通过
 

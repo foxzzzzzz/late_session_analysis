@@ -335,7 +335,7 @@ class LateSessionPipeline:
             if fm:
                 ctx.price_at_1430 = fm['price_at_1430']
                 ctx.late_price_change = fm['late_price_change']
-                ctx.afternoon_volume_ratio = fm['afternoon_volume_ratio']
+                ctx.late_volume_ratio = fm['late_volume_ratio']
                 ctx.last_5min_volume_pct = fm['last_5min_volume_pct']
                 ctx.morning_volume = fm['morning_volume']
                 ctx.afternoon_volume = fm['afternoon_volume']

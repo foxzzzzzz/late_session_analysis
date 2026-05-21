@@ -140,13 +140,13 @@ def _score_tail_strength(ctx, max_a: int) -> float:
         score += 2
 
     # 尾盘放量倍数 (0-8)
-    if ctx.afternoon_volume_ratio >= 3:
+    if ctx.late_volume_ratio >= 3:
         score += 8
-    elif ctx.afternoon_volume_ratio >= 2:
+    elif ctx.late_volume_ratio >= 2:
         score += 6
-    elif ctx.afternoon_volume_ratio >= 1.5:
+    elif ctx.late_volume_ratio >= 1.5:
         score += 4
-    elif ctx.afternoon_volume_ratio >= 1.0:
+    elif ctx.late_volume_ratio >= 1.0:
         score += 2
     # 最后5分钟量占比加成
     if ctx.last_5min_volume_pct >= 15:

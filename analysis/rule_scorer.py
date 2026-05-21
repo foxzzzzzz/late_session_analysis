@@ -25,11 +25,11 @@ def rule_based_recommendation(ctx) -> dict:
         signals.append(('尾盘温和上涨', 1))
 
     # 量能信号
-    if ctx.afternoon_volume_ratio >= 2.5:
+    if ctx.late_volume_ratio >= 2.5:
         signals.append(('大幅放量', 3))
-    elif ctx.afternoon_volume_ratio >= 1.5:
+    elif ctx.late_volume_ratio >= 1.5:
         signals.append(('放量', 2))
-    elif ctx.afternoon_volume_ratio >= 1.0:
+    elif ctx.late_volume_ratio >= 1.0:
         signals.append(('量能正常', 1))
 
     # 大单信号

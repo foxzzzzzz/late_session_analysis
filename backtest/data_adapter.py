@@ -129,7 +129,7 @@ class HistoricalDataAdapter:
         df_5min = bars_5min.get(code)
         if df_5min is not None and not df_5min.empty:
             s2 = compute_s2_metrics(df_5min)
-            ctx.afternoon_volume_ratio = s2["afternoon_volume_ratio"]
+            ctx.late_volume_ratio = s2["late_volume_ratio"]
             ctx.late_price_change = s2["late_price_change"]
             ctx.last_5min_volume_pct = s2["last_5min_vol_pct"]
             ctx.broke_high = s2["broke_high"]

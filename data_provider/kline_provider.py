@@ -330,7 +330,7 @@ class KlineProvider:
 
         Returns:
             dict with: price_at_1430, late_price_change, morning_volume,
-                       afternoon_volume, afternoon_volume_ratio, last_5min_volume,
+                       afternoon_volume, late_volume_ratio, last_5min_volume,
                        last_5min_volume_pct, broke_high, intraday_high
         """
         if df_5min is None or df_5min.empty:
@@ -352,10 +352,11 @@ class KlineProvider:
             else:
                 return _empty_late_metrics()
 
-        # 上午 (9:30-11:30) vs 下午 (13:00-15:00)
+        # 上午 (9:30-11:30) vs 尾盘前 (13:00-14:30) vs 尾盘 (14:30-15:00)
         morning_mask = df["_t"].dt.hour < 12
         afternoon_mask = df["_t"].dt.hour >= 13
         late_mask = (df["_t"].dt.hour >= 14) & (df["_t"].dt.minute >= 30)
+        pre_late_mask = afternoon_mask & ~late_mask  # 13:00-14:30
 
         # 成交量: 优先 turnover (成交额), 其次 volume
         if "turnover" in df.columns:
@@ -366,9 +367,11 @@ class KlineProvider:
             vol_col = "volume" if "volume" in df.columns else "vol"
 
         morning_vol = float(df.loc[morning_mask, vol_col].sum()) if morning_mask.any() else 0.0
-        afternoon_vol = float(df.loc[afternoon_mask, vol_col].sum()) if afternoon_mask.any() else 0.0
+        pre_late_vol = float(df.loc[pre_late_mask, vol_col].sum()) if pre_late_mask.any() else 0.0
+        late_vol = float(df.loc[late_mask, vol_col].sum()) if late_mask.any() else 0.0
         total_vol = float(df[vol_col].sum())
-        afternoon_volume_ratio = afternoon_vol / max(morning_vol, 1.0)
+        # 尾盘量比: 14:30后 / 13:00-14:30 (捕捉尾盘相对放量)
+        late_volume_ratio = late_vol / max(pre_late_vol, 1.0)
 
         # 14:30 价格
         bar_1430 = df[(df["_t"].dt.hour == 14) & (df["_t"].dt.minute == 30)]
@@ -404,8 +407,8 @@ class KlineProvider:
             "price_at_1430": price_at_1430,
             "late_price_change": round(late_price_change, 4),
             "morning_volume": morning_vol,
-            "afternoon_volume": afternoon_vol,
-            "afternoon_volume_ratio": round(afternoon_volume_ratio, 4),
+            "afternoon_volume": pre_late_vol + late_vol,  # 13:00+ 总量 (兼容旧字段)
+            "late_volume_ratio": round(late_volume_ratio, 4),
             "last_5min_volume": last_5min_raw_vol,
             "last_5min_volume_pct": round(last_5min_vol_pct, 2),
             "broke_high": broke_high,
@@ -419,7 +422,7 @@ def _empty_late_metrics() -> dict:
         "late_price_change": 0.0,
         "morning_volume": 0.0,
         "afternoon_volume": 0.0,
-        "afternoon_volume_ratio": 0.0,
+        "late_volume_ratio": 0.0,
         "last_5min_volume": 0.0,
         "last_5min_volume_pct": 0.0,
         "broke_high": False,

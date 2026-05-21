@@ -12,7 +12,7 @@ def make_ctx(**kwargs):
     defaults = {
         'code': '000001', 'name': '测试股', 'price': 10.0,
         'change_pct': 3.0,
-        'late_price_change': 3.0, 'afternoon_volume_ratio': 2.5,
+        'late_price_change': 3.0, 'late_volume_ratio': 2.5,
         'last_5min_volume_pct': 12.0,
         'big_order_net': 10_000_000, 'big_order_ratio': 0.25,
         'active_buy_ratio': 62.0,
@@ -44,7 +44,7 @@ class TestLayer4Scoring:
     def test_weak_stock_scores_low(self):
         """弱信号股票应该得低分 (<60)"""
         ctx = make_ctx(
-            late_price_change=0.2, afternoon_volume_ratio=0.5,
+            late_price_change=0.2, late_volume_ratio=0.5,
             big_order_net=0, big_order_ratio=0,
             ma_alignment='', anomaly_type='volume_only',
             broke_high=False, yang_days_4=0, consecutive_close_rise=0,
@@ -56,9 +56,9 @@ class TestLayer4Scoring:
 
     def test_sorted_by_score(self):
         """返回结果按评分降序"""
-        strong = make_ctx(code='000001', late_price_change=5.0, afternoon_volume_ratio=3.0)
-        medium = make_ctx(code='000002', late_price_change=2.0, afternoon_volume_ratio=1.5)
-        weak = make_ctx(code='000003', late_price_change=0.5, afternoon_volume_ratio=0.8)
+        strong = make_ctx(code='000001', late_price_change=5.0, late_volume_ratio=3.0)
+        medium = make_ctx(code='000002', late_price_change=2.0, late_volume_ratio=1.5)
+        weak = make_ctx(code='000003', late_price_change=0.5, late_volume_ratio=0.8)
         result = score_l4([weak, strong, medium], capital_data_date='today')
         codes = [c.code for c in result]
         assert codes[0] == '000001'
@@ -66,7 +66,7 @@ class TestLayer4Scoring:
     def test_strong_buy_threshold(self):
         """得分 >85 应为 strong_buy"""
         ctx = make_ctx(
-            late_price_change=5.0, afternoon_volume_ratio=3.5,
+            late_price_change=5.0, late_volume_ratio=3.5,
             last_5min_volume_pct=18.0,
             big_order_net=20_000_000, big_order_ratio=0.35,
             bid_vol=50_000, ask_vol=10_000,
@@ -97,7 +97,7 @@ class TestLayer4Scoring:
         config = L4Config(high_attention_threshold=85, buy_threshold=75,
                           medium_attention_threshold=60)
         # strong_buy: >85
-        s1 = make_ctx(code='s1', late_price_change=5.0, afternoon_volume_ratio=4.0,
+        s1 = make_ctx(code='s1', late_price_change=5.0, late_volume_ratio=4.0,
                       big_order_net=20_000_000, big_order_ratio=0.4,
                       bid_vol=100_000, ask_vol=10_000,
                       yang_days_4=4, consecutive_close_rise=5,
@@ -106,13 +106,13 @@ class TestLayer4Scoring:
                       sector_performance=5.0, hot_concepts=['AI','芯片','新能源'],
                       leader_strength=True, anomaly_type='breakout')
         # buy: 75-85
-        s2 = make_ctx(code='s2', late_price_change=2.5, afternoon_volume_ratio=2.5,
+        s2 = make_ctx(code='s2', late_price_change=2.5, late_volume_ratio=2.5,
                       big_order_net=7_000_000, big_order_ratio=0.2,
                       yang_days_4=3, consecutive_close_rise=3,
                       broke_high=True, body_amplifying=False, volatility=25,
                       ma5_accelerating=True, ma_alignment='above_ma5_strong')
         # watch: 60-75
-        s3 = make_ctx(code='s3', late_price_change=2.0, afternoon_volume_ratio=2.2,
+        s3 = make_ctx(code='s3', late_price_change=2.0, late_volume_ratio=2.2,
                       big_order_net=5_500_000, big_order_ratio=0.15,
                       yang_days_4=3, consecutive_close_rise=3,
                       broke_high=False, body_amplifying=False, volatility=25,
@@ -137,7 +137,7 @@ class TestLayer4Scoring:
     def test_ma_dimension_scores(self):
         """D维度均线系统子分计算"""
         ctx = make_ctx(
-            late_price_change=1.0, afternoon_volume_ratio=1.0,
+            late_price_change=1.0, late_volume_ratio=1.0,
             big_order_net=0, big_order_ratio=0,
             yang_days_4=2, consecutive_close_rise=1,
             broke_high=False, body_amplifying=False,

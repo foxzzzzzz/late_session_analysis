@@ -10,7 +10,7 @@ class TestRuleScorer:
     def test_strong_signal_returns_buy(self):
         ctx = StockContext(
             code='000001', name='强势股',
-            late_price_change=4.0, afternoon_volume_ratio=3.0,
+            late_price_change=4.0, late_volume_ratio=3.0,
             big_order_ratio=0.35, big_order_net=10_000_000,
             ma_alignment='bullish',
         )
@@ -21,7 +21,7 @@ class TestRuleScorer:
     def test_no_signal_returns_skip(self):
         ctx = StockContext(
             code='000001', name='僵尸股',
-            late_price_change=0.1, afternoon_volume_ratio=0.3,
+            late_price_change=0.1, late_volume_ratio=0.3,
             big_order_ratio=0, big_order_net=0,
             ma_alignment='',
         )
@@ -45,7 +45,7 @@ class TestMerger:
     def test_missing_llm_result_falls_back(self):
         ctx = StockContext(
             code='000001', name='测试', total_score=80.0,
-            late_price_change=4.0, afternoon_volume_ratio=2.0,
+            late_price_change=4.0, late_volume_ratio=2.0,
             big_order_ratio=0.3, big_order_net=5_000_000,
             ma_alignment='bullish',
         )
@@ -93,7 +93,7 @@ class TestPrompts:
         ctx = StockContext(
             code='000001', name='平安银行', price=12.50,
             change_pct=3.5, late_price_change=2.8,
-            afternoon_volume_ratio=2.0, last_5min_volume_pct=10.0,
+            late_volume_ratio=2.0, last_5min_volume_pct=10.0,
             turnover_rate=4.0, turnover=800_000_000,
             big_order_net=5_000_000, big_order_ratio=0.25,
             active_buy_ratio=60.0,

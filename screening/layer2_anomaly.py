@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class L2Config:
     # 尾盘放量
-    volume_ratio_min: float = 1.5        # 14:30后量 / 上午量
-    last_5min_vol_pct_min: float = 8.0   # 最后5分钟量占比(%)
+    volume_ratio_min: float = 1.2        # 14:30后量 / 上午量 (原1.5，p95~1.07，下调以适配当前市场)
+    last_5min_vol_pct_min: float = 5.0   # 最后5分钟量占比(%)
     # 价格形态
     late_rally_min: float = 2.0          # 尾盘拉升最低涨幅(%)
     recovery_drop_min: float = 3.0       # 企稳: 14:30前跌幅(%)
@@ -67,7 +67,7 @@ def screen_l2_anomaly(
             diag["vol_pass"] += 1
             diag["price_pass"] += 1
             diag["capital_pass"] += 1
-        vol_ratios.append(ctx.afternoon_volume_ratio)
+        vol_ratios.append(ctx.late_volume_ratio)
         last5_pcts.append(ctx.last_5min_volume_pct)
         late_changes.append(ctx.late_price_change)
         if ctx.l2_passed:
@@ -76,7 +76,9 @@ def screen_l2_anomaly(
 
     logger.info(f"L2 异动: {len(contexts)} → {len(passed)} "
                 f"({len(passed) / max(len(contexts), 1) * 100:.1f}%)")
-    logger.info(f"L2 诊断: 量失败={diag['vol_fail']}, 价失败={diag['price_fail']}, "
+    logger.info(f"L2 诊断: 量比失败={diag.get('vol_ratio_fail', 0)}, "
+                f"尾盘量失败={diag.get('last5min_fail', 0)}, "
+                f"价失败={diag['price_fail']}, "
                 f"资金失败={diag['capital_fail']} | "
                 f"量通过={diag['vol_pass']}, 价通过={diag['price_pass']}, 资金通过={diag['capital_pass']}")
 
@@ -102,13 +104,16 @@ def _check_l2(ctx, cfg: L2Config, has_depth: bool, has_capital: bool) -> tuple[b
 
     # 1. 尾盘放量 (必须满足其中一项)
     vol_ok = False
-    if ctx.afternoon_volume_ratio >= cfg.volume_ratio_min:
-        vol_ok = True
-    if ctx.last_5min_volume_pct >= cfg.last_5min_vol_pct_min:
+    vol_ratio_ok = ctx.late_volume_ratio >= cfg.volume_ratio_min
+    last5min_ok = ctx.last_5min_volume_pct >= cfg.last_5min_vol_pct_min
+    if vol_ratio_ok or last5min_ok:
         vol_ok = True
 
     if not vol_ok and cfg.require_volume:
-        failures.append("vol_fail")
+        if not vol_ratio_ok:
+            failures.append("vol_ratio_fail")
+        if not last5min_ok:
+            failures.append("last5min_fail")
         return False, failures
 
     # 2. 价格形态 (至少满足一项)

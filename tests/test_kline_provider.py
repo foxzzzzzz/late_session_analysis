@@ -193,7 +193,7 @@ class TestComputeLateMetrics:
 
         assert m["price_at_1430"] == pytest.approx(10.0, abs=0.01)
         assert m["late_price_change"] > 0
-        assert m["afternoon_volume_ratio"] > 0
+        assert m["late_volume_ratio"] > 0
         assert m["last_5min_volume_pct"] > 0
 
     def test_afternoon_decline(self):
@@ -250,9 +250,9 @@ class TestComputeLateMetrics:
         df = make_5min_df(times, closes, volumes=volumes)
         m = KlineProvider.compute_late_metrics(df)
 
-        # afternoon_volume_ratio = afternoon / morning
+        # late_volume_ratio = late(14:30+) / pre_late(13:00-14:30)
         assert m["afternoon_volume"] > m["morning_volume"]
-        assert m["afternoon_volume_ratio"] > 1.0
+        assert m["late_volume_ratio"] > 0
 
     def test_price_at_1430_from_bar(self):
         """price_at_1430从14:30 bar精确取"""

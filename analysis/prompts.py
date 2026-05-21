@@ -37,7 +37,7 @@ def make_stock_prompt(ctx) -> str:
         f"股票: {ctx.name}({ctx.code})",
         f"价格: {ctx.price:.2f} | 涨跌幅: {ctx.change_pct:+.2f}%",
         f"异动: {anomaly_label} | 尾盘涨幅: {ctx.late_price_change:+.2f}%",
-        f"量比(午后/上午): {ctx.afternoon_volume_ratio:.1f}x | 尾盘5分钟量占比: {ctx.last_5min_volume_pct:.1f}%",
+        f"尾盘量比(14:30后/13:00-14:30): {ctx.late_volume_ratio:.1f}x | 尾盘5分钟量占比: {ctx.last_5min_volume_pct:.1f}%",
         f"换手率: {ctx.turnover_rate:.1f}% | 成交额: {ctx.turnover/1e8:.1f}亿",
     ]
 

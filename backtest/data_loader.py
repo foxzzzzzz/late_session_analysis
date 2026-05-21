@@ -468,7 +468,7 @@ def compute_s2_metrics(df_5min: pd.DataFrame) -> dict:
         df_5min: 单日5分钟K线，列为 [time, open, close, high, low, ..., volume, turnover, ...]
 
     Returns:
-        dict with: afternoon_volume_ratio, late_price_change, last_5min_vol_pct,
+        dict with: late_volume_ratio, late_price_change, last_5min_vol_pct,
                    broke_high, intraday_high, price_at_1430, morning_vol, afternoon_vol,
                    total_vol, late_volume
     """
@@ -496,9 +496,12 @@ def compute_s2_metrics(df_5min: pd.DataFrame) -> dict:
 
     morning_vol = df.loc[morning_mask, turnover_col].sum() if morning_mask.any() else 0
     afternoon_vol = df.loc[afternoon_mask, turnover_col].sum() if afternoon_mask.any() else 0
+    pre_late_mask = afternoon_mask & ~late_mask  # 13:00-14:30
+    pre_late_vol = df.loc[pre_late_mask, turnover_col].sum() if pre_late_mask.any() else 0
+    late_vol = df.loc[late_mask, turnover_col].sum() if late_mask.any() else 0
     total_vol = df[turnover_col].sum()
 
-    afternoon_volume_ratio = afternoon_vol / max(morning_vol, 1)
+    late_volume_ratio = late_vol / max(pre_late_vol, 1.0)
 
     # 14:30 价格
     bar_1430 = df[(df["_t"].dt.hour == 14) & (df["_t"].dt.minute == 30)]
@@ -529,7 +532,7 @@ def compute_s2_metrics(df_5min: pd.DataFrame) -> dict:
     broke_high = bool(after_1430_high > pre_1430_high * 0.99) if after_1430_high > 0 else False
 
     return {
-        "afternoon_volume_ratio": round(afternoon_volume_ratio, 4),
+        "late_volume_ratio": round(late_volume_ratio, 4),
         "late_price_change": round(late_price_change, 4),
         "last_5min_vol_pct": round(last_5min_vol_pct, 2),
         "broke_high": broke_high,
@@ -557,7 +560,7 @@ def _code_to_baostock(code: str) -> str:
 
 def _empty_s2_metrics() -> dict:
     return {
-        "afternoon_volume_ratio": 0.0,
+        "late_volume_ratio": 0.0,
         "late_price_change": 0.0,
         "last_5min_vol_pct": 0.0,
         "broke_high": False,
