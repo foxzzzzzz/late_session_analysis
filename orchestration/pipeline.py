@@ -259,7 +259,10 @@ class LateSessionPipeline:
         Args:
             codes: 指定股票代码列表。None 表示拉取全市场。
         """
-        if codes:
+        if codes is not None:
+            # codes=[] → 不拉取任何数据；codes=None → 拉全市场
+            if not codes:
+                return []
             quotes = self.fetcher_mgr.fetch_codes(codes)
         else:
             quotes = self.fetcher_mgr.fetch_snapshot()
@@ -662,6 +665,10 @@ class LateSessionPipeline:
                 f"(资金流向: {'已获取' if self._fund_flow_fetched else '未获取'})"
             )
             self._log_low_count(contexts, "S2 L2异常")
+
+            if not codes:
+                logger.info("S2 候选池清空，提前结束循环")
+                break
 
             if not self._sleep_or_break("14:55", loop_interval):
                 break
