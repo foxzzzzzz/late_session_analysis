@@ -527,6 +527,20 @@ class LateSessionPipeline:
         if leader_count > 0:
             logger.info(f"龙头效应: {leader_count} 只认定为板块龙头")
 
+    def _log_low_count(self, contexts, label: str, threshold: int = 10):
+        """通过数 < threshold 时输出股票明细"""
+        if len(contexts) >= threshold:
+            return
+        if not contexts:
+            logger.info(f"{label}: 0 只通过")
+            return
+        logger.info(f"{label}: {len(contexts)} 只 ->")
+        for ctx in contexts:
+            if hasattr(ctx, 'name'):
+                logger.info(f"  {ctx.code} {ctx.name}")
+            else:
+                logger.info(f"  {ctx}")
+
     # ============================================================
     # S0: 板块预筛选
     # ============================================================
@@ -542,6 +556,7 @@ class LateSessionPipeline:
 
         self.tracker.stage_end("S0_板块预筛选", len(codes))
         logger.info(f"S0 完成: {len(codes)} 只候选股票")
+        self._log_low_count(codes, "S0 板块预筛选")
         return codes
 
     # ============================================================
@@ -560,12 +575,14 @@ class LateSessionPipeline:
         contexts = screen_l1_access(contexts, self.funnel.config.l1)
         self.funnel.stats['l1_count'] = len(contexts)
         logger.info(f"S1 L1通过: {len(contexts)} 只")
+        self._log_low_count(contexts, "S1 L1准入")
 
         # K线形态预筛选
         if self.kline_config:
             from screening.layer_kline import screen_kline
             contexts = screen_kline(contexts, self.kline_config, self._daily_cache)
             logger.info(f"S1 K线形态通过: {len(contexts)} 只")
+            self._log_low_count(contexts, "S1 K线形态")
 
         self.tracker.stage_end("S1_K线扫描", len(contexts))
         return contexts
@@ -635,6 +652,7 @@ class LateSessionPipeline:
                     has_capital_data=False,
                 )
                 logger.info(f"L2 放宽后: {len(contexts)} 只通过")
+                self._log_low_count(contexts, "S2 L2(放宽)")
 
             self.funnel.stats['l2_count'] = len(contexts)
             codes = [c.code for c in contexts]
@@ -643,6 +661,7 @@ class LateSessionPipeline:
                 f"S2 L2通过: {len(contexts)} 只 "
                 f"(资金流向: {'已获取' if self._fund_flow_fetched else '未获取'})"
             )
+            self._log_low_count(contexts, "S2 L2异常")
 
             if not self._sleep_or_break("14:55", loop_interval):
                 break
@@ -812,6 +831,7 @@ class LateSessionPipeline:
             )
             self.funnel.stats['l3_count'] = len(l3_passed)
             logger.info(f"S3 L3通过: {len(l3_passed)} 只")
+            self._log_low_count(l3_passed, "S3 L3技术")
 
             # 北向资金情绪 (首轮获取)
             if iteration == 1:
@@ -838,6 +858,7 @@ class LateSessionPipeline:
 
         top30 = self.funnel.get_top(scored, 30)
         self.tracker.stage_end("S3_均线验证", len(scored))
+        self._log_low_count(top30, "S3 L4评分(top30)")
         return scored, top30
 
     # ============================================================
@@ -891,6 +912,12 @@ class LateSessionPipeline:
         strong_buy = [c for c in top30 if c.recommendation == 'strong_buy']
         buy_stocks = [c for c in top30 if c.recommendation == 'buy']
         watch_stocks = [c for c in top30 if c.recommendation == 'watch']
+
+        actionable = strong_buy + buy_stocks
+        if len(actionable) < 10:
+            logger.info(f"最终推荐: strong_buy={len(strong_buy)} buy={len(buy_stocks)} ->")
+            for ctx in actionable:
+                logger.info(f"  {ctx.code} {ctx.name} ({ctx.recommendation})")
 
         # 汇总统计
         llm_fallback_count = sum(1 for c in top30 if c.llm_fallback)
