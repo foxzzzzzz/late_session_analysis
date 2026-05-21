@@ -1,0 +1,4 @@
+__pycache__/
+reports/
+data/kline_cache/
+.claude/settings.local.json
