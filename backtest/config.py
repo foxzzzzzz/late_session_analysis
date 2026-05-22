@@ -33,6 +33,10 @@ class BacktestConfig(SystemConfig):
     slippage_bps: float = 5.0
     commission_rate: float = 0.00025
 
+    # 风险控制
+    stop_loss_pct: float = -5.0    # 止损线 (%) — 负值表示亏损
+    take_profit_pct: float = 5.0   # 止盈线 (%) — 正值表示盈利
+
     # 仓位
     max_positions: int = 5
 
@@ -55,31 +59,29 @@ class BacktestConfig(SystemConfig):
         self.commission_rate = float(os.getenv("BT_COMMISSION_RATE", str(self.commission_rate)))
         self.output_dir = os.getenv("BT_OUTPUT_DIR", self.output_dir)
 
-        # 回测专用 L2 阈值 — 比实盘管线宽松
-        # 实盘在 14:50-14:55 每1分钟重复扫描，单次阈值高仍有多次机会
-        # 回测用收盘快照做单次判断，必须调低阈值才能捕获足够候选
-        # 每个阈值都可通过 BT_L2_* 环境变量覆盖
-        self.l2_volume_ratio = float(os.getenv("BT_L2_VOLUME_RATIO", "1.5"))
-        self.l2_last5min_vol_pct = float(os.getenv("BT_L2_LAST5MIN_VOL_PCT", "6.0"))
-        self.l2_late_rally_pct = float(os.getenv("BT_L2_LATE_RALLY_PCT", "1.5"))
-        self.l2_recovery_drop = float(os.getenv("BT_L2_RECOVERY_DROP", "2.0"))
-        self.l2_recovery_rise = float(os.getenv("BT_L2_RECOVERY_RISE", "1.0"))
-        self.l2_active_buy_pct = float(os.getenv("BT_L2_ACTIVE_BUY_PCT", "50.0"))
+        # 回测 L2 阈值 — 默认对齐实盘，可通过 BT_L2_* 环境变量覆盖
+        self.l2_volume_ratio = float(os.getenv("BT_L2_VOLUME_RATIO", str(self.l2_volume_ratio)))
+        self.l2_last5min_vol_pct = float(os.getenv("BT_L2_LAST5MIN_VOL_PCT", str(self.l2_last5min_vol_pct)))
+        self.l2_late_rally_pct = float(os.getenv("BT_L2_LATE_RALLY_PCT", str(self.l2_late_rally_pct)))
+        self.l2_recovery_drop = float(os.getenv("BT_L2_RECOVERY_DROP", str(self.l2_recovery_drop)))
+        self.l2_recovery_rise = float(os.getenv("BT_L2_RECOVERY_RISE", str(self.l2_recovery_rise)))
+        self.l2_active_buy_pct = float(os.getenv("BT_L2_ACTIVE_BUY_PCT", str(self.l2_active_buy_pct)))
 
         # 回测专用 L2 最低保障
         self.l2_min_pass = int(os.getenv("BT_L2_MIN_PASS", str(self.l2_min_pass)))
 
-        # 回测专用 K线 阈值 — 默认比实盘宽松 (回测单次快照 vs 实盘多次循环扫描)
+        # 回测 K线 阈值 — 默认对齐实盘，可通过 BT_KLINE_* 环境变量覆盖
         self.kline_min_atr_pct = float(os.getenv("BT_KLINE_MIN_ATR_PCT", str(self.kline_min_atr_pct)))
         self.kline_max_atr_pct = float(os.getenv("BT_KLINE_MAX_ATR_PCT", str(self.kline_max_atr_pct)))
         self.kline_max_consecutive_up = int(os.getenv("BT_KLINE_MAX_CONSECUTIVE_UP", str(self.kline_max_consecutive_up)))
         self.kline_max_up_in_9days = int(os.getenv("BT_KLINE_MAX_UP_IN_9DAYS", str(self.kline_max_up_in_9days)))
         self.kline_max_single_day_pct = float(os.getenv("BT_KLINE_MAX_SINGLE_DAY_PCT", str(self.kline_max_single_day_pct)))
-        self.kline_min_yang_ratio_4d = float(os.getenv("BT_KLINE_MIN_YANG_RATIO_4D", "0.25"))
-        self.kline_min_consecutive_close_rise = int(os.getenv("BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE", "0"))
-        self.kline_min_close_rise_pct = float(os.getenv("BT_KLINE_MIN_CLOSE_RISE_PCT", "0.0"))
+        self.kline_min_yang_ratio_4d = float(os.getenv("BT_KLINE_MIN_YANG_RATIO_4D", "0.50"))
+        self.kline_min_consecutive_close_rise = int(os.getenv("BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE", "2"))
+        self.kline_min_close_rise_pct = float(os.getenv("BT_KLINE_MIN_CLOSE_RISE_PCT", str(self.kline_min_close_rise_pct)))
 
-        # 回测专用 L4 推荐阈值 — 无资金流/LLM时评分偏低，需下调
+        # 回测 L4 推荐阈值 — 低于实盘值，因为回测无资金流向数据(占20%权重)
+        # 可通过 BT_L4_* 环境变量覆盖
         self.l4_strong_buy = float(os.getenv("BT_L4_STRONG_BUY", "35.0"))
         self.l4_buy = float(os.getenv("BT_L4_BUY", "25.0"))
         self.l4_watch = float(os.getenv("BT_L4_WATCH", "15.0"))

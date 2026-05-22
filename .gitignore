@@ -1,4 +1,6 @@
 __pycache__/
 reports/
 data/kline_cache/
+backtest_cache/
+backtest_reports/
 .claude/settings.local.json

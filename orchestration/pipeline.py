@@ -219,6 +219,7 @@ class LateSessionPipeline:
                                 'yang_days_4': KlineProvider.count_yang_days_4(df),
                                 'body_amplifying': KlineProvider.check_body_amplifying(df),
                                 'consecutive_close_rise': KlineProvider.compute_consecutive_close_rise(df),
+                                'position_20d': KlineProvider.compute_position_20d(df),
                             }
                     logger.info(f"日线指标计算完成: {len(self._daily_metrics)} 只")
             else:
@@ -317,6 +318,7 @@ class LateSessionPipeline:
                 ctx.yang_days_4 = dm.get('yang_days_4', 0)
                 ctx.body_amplifying = dm.get('body_amplifying', False)
                 ctx.consecutive_close_rise = dm.get('consecutive_close_rise', 0)
+                ctx.position_20d = dm.get('position_20d', 0.0)
                 ctx.data_quality_flags['daily_kline'] = True
                 ctx.data_quality_flags['ma_calculated'] = True
                 ctx.data_quality_flags['volatility_calculated'] = True

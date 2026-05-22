@@ -162,6 +162,14 @@ class HistoricalDataAdapter:
             ctx.consecutive_close_rise = KlineProvider.compute_consecutive_close_rise(df_daily)
             ctx.ma5_accelerating = KlineProvider.compute_ma5_acceleration(df_daily)
             ctx.volume_shrinking = KlineProvider.check_volume_shrink(df_daily)
+            ctx.position_20d = KlineProvider.compute_position_20d(df_daily)
+            # 近10日胜率 (收盘>开盘)
+            recent = df_daily.tail(10)
+            wins = sum(
+                1 for _, r in recent.iterrows()
+                if float(r.get('close', 0)) > float(r.get('open', 0))
+            )
+            ctx.history_win_rate = wins / len(recent) * 100
         # 无日线数据时 MA/波动率保持为 0 (L3 会将其标记为数据缺失)
 
         return ctx

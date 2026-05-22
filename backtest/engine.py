@@ -46,11 +46,11 @@ class BacktestEngine:
             recovery_drop_min=self.config.l2_recovery_drop,
             recovery_rise_min=self.config.l2_recovery_rise,
             active_buy_ratio_min=self.config.l2_active_buy_pct,
-            require_capital=False,
+            require_capital=True,
             require_orderbook=False,
         )
         self.l3_config = L3Config(
-            require_above_ma=False,
+            require_above_ma=True,
             min_history_win_rate=self.config.l3_min_history_win,
             max_volatility=getattr(self.config, 'l3_max_volatility', 50.0),
             max_consecutive_limits=getattr(self.config, 'l3_max_consecutive_limits', 1),
@@ -172,13 +172,16 @@ class BacktestEngine:
         # 获取 pre_close 映射 (从前一日数据)
         pre_close_map = self._get_pre_close_map(date_str)
 
+        # 计算板块涨跌幅 (回填 sector_performance 数据缺口)
+        sector_perf = self._compute_sector_perf(snapshot)
+
         # 2. 加载5分钟线 (仅对于需要进入S2的股票，先跑S1再决定)
         # 优化: 先用日线跑 S1 过滤，只对通过的股票拉5分钟线
-        s1_contexts = self._run_s1_with_daily(snapshot, date_str, pre_close_map)
+        s1_contexts = self._run_s1_with_daily(snapshot, date_str, pre_close_map, sector_perf)
         s1_count = len(s1_contexts)
 
         # 3. S2: 对S1通过的股票拉5分钟线，精确计算S2指标
-        s2_contexts = self._run_s2_with_5min(s1_contexts, date_str, pre_close_map)
+        s2_contexts = self._run_s2_with_5min(s1_contexts, date_str, pre_close_map, sector_perf)
         s2_count = len(s2_contexts)
 
         # 4. S3: 技术验证
@@ -226,6 +229,19 @@ class BacktestEngine:
             pass
         return {}
 
+    def _compute_sector_perf(self, snapshot: pd.DataFrame) -> dict[str, float]:
+        """从日线快照计算板块平均涨跌幅"""
+        if not self.sector_codes or snapshot.empty:
+            return {}
+        sector_perf = {}
+        for sector, codes in self.sector_codes.items():
+            sector_rows = snapshot[snapshot["code"].isin(codes)]
+            if not sector_rows.empty:
+                chg = sector_rows.get("change_pct", sector_rows.get("涨跌幅"))
+                if chg is not None and not chg.empty:
+                    sector_perf[sector] = float(pd.to_numeric(chg, errors="coerce").mean())
+        return sector_perf
+
     def _truncate_daily_bars(self, date_str: str) -> dict:
         """截断日线数据到指定日期 (避免 lookahead bias)"""
         result = {}
@@ -244,12 +260,13 @@ class BacktestEngine:
     # ============================================================
 
     def _run_s1_with_daily(self, snapshot: pd.DataFrame, date_str: str,
-                           pre_close_map: dict[str, float]) -> list:
+                           pre_close_map: dict[str, float],
+                           sector_perf: dict[str, float] = None) -> list:
         """用日线数据创建 StockContext 并跑 S1"""
         # 日线截断到当前回测日 (避免 lookahead bias)
         daily_upto = self._truncate_daily_bars(date_str)
         adapter = HistoricalDataAdapter(
-            self.config, self.sector_map, sector_perf={}, northbound={}
+            self.config, self.sector_map, sector_perf=sector_perf or {}, northbound={}
         )
         contexts = adapter.adapt_single_day(snapshot, date_str, bars_5min=None,
                                             pre_close_map=pre_close_map,
@@ -287,7 +304,8 @@ class BacktestEngine:
     # ============================================================
 
     def _run_s2_with_5min(self, contexts: list, date_str: str,
-                          pre_close_map: dict[str, float]) -> list:
+                          pre_close_map: dict[str, float],
+                          sector_perf: dict[str, float] = None) -> list:
         """对S1通过的股票拉5分钟线，重建 StockContext 并跑 S2"""
         if not contexts:
             return []
@@ -298,9 +316,22 @@ class BacktestEngine:
         bars_5min = self.loader.load_5min_bars_batch(codes, date_str)
         logger.info(f"[{date_str}] S2: 获取到 {len(bars_5min)} 只5分钟线")
 
+        # 截断到14:59 — 模拟实盘收盘窗口，获取最完整的尾盘数据
+        cutoff = pd.Timestamp(f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 14:59:00")
+        truncated = {}
+        for c, df in bars_5min.items():
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                time_col = pd.to_datetime(df.iloc[:, 0])
+                df_cut = df[time_col <= cutoff]
+                if not df_cut.empty:
+                    truncated[c] = df_cut
+            else:
+                truncated[c] = df
+        bars_5min = truncated
+
         # 重建 StockContext (带5分钟线精确S2指标)
         adapter = HistoricalDataAdapter(
-            self.config, self.sector_map, sector_perf={}, northbound={}
+            self.config, self.sector_map, sector_perf=sector_perf or {}, northbound={}
         )
         # 重新获取日线快照
         snapshot = self.loader.get_daily_snapshot(self.daily_bars, date_str)
@@ -393,7 +424,12 @@ class BacktestEngine:
 
     def _calculate_trades(self, buys: list, date_str: str,
                           next_date: Optional[str]) -> list[Trade]:
-        """计算买入信号的 T+1 退出收益"""
+        """计算买入信号的 T+1 退出收益 (含止损/止盈风控)
+
+        优先级: 止损 > 止盈 > 次日开盘
+        止损: 次日最低价触及 entry * (1 + stop_loss_pct/100) → 以止损价退出
+        止盈: 次日最高价触及 entry * (1 + take_profit_pct/100) → 以止盈价退出
+        """
         trades = []
         if not next_date:
             return trades
@@ -402,21 +438,40 @@ class BacktestEngine:
         if next_snapshot.empty:
             return trades
 
-        # 建立次日开盘价索引
-        next_open_map = {}
+        # 建立次日价格索引
+        next_price_map = {}
         for _, row in next_snapshot.iterrows():
             code = str(row.get("code", "")).zfill(6)
-            open_price = float(row.get("open", row.get("开盘", 0)))
-            if open_price > 0:
-                next_open_map[code] = open_price
+            open_p = float(row.get("open", row.get("开盘", 0)))
+            high_p = float(row.get("high", row.get("最高", 0)))
+            low_p = float(row.get("low", row.get("最低", 0)))
+            if open_p > 0:
+                next_price_map[code] = {"open": open_p, "high": high_p, "low": low_p}
+
+        stop_loss_pct = self.config.stop_loss_pct  # e.g. -5.0
+        take_profit_pct = self.config.take_profit_pct  # e.g. 5.0
 
         for ctx in buys[:self.config.max_positions]:
             entry = ctx.price * (1 + self.config.slippage_bps / 10000)
-            exit_price = next_open_map.get(ctx.code)
-            if exit_price is None:
+            prices = next_price_map.get(ctx.code)
+            if prices is None:
                 continue
 
-            exit_p = exit_price * (1 - self.config.slippage_bps / 10000)
+            stop_price = entry * (1 + stop_loss_pct / 100)
+            profit_price = entry * (1 + take_profit_pct / 100)
+            exit_p = None
+            exit_reason = "next_open"
+
+            # 止损 > 止盈 > 次日开盘
+            if prices["low"] > 0 and prices["low"] <= stop_price:
+                exit_p = stop_price * (1 - self.config.slippage_bps / 10000)
+                exit_reason = "stop_loss"
+            elif prices["high"] > 0 and prices["high"] >= profit_price:
+                exit_p = profit_price * (1 - self.config.slippage_bps / 10000)
+                exit_reason = "take_profit"
+            else:
+                exit_p = prices["open"] * (1 - self.config.slippage_bps / 10000)
+
             return_pct = (exit_p - entry) / entry * 100 - self.config.commission_rate * 2 * 100
 
             trades.append(Trade(
@@ -436,6 +491,7 @@ class BacktestEngine:
                 score_env=round(ctx.score_market_env, 2),
                 score_history=round(ctx.score_history, 2),
                 score_fundamental=round(getattr(ctx, 'score_fundamental', 0), 2),
+                exit_reason=exit_reason,
             ))
 
         return trades

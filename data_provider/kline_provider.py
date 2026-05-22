@@ -296,6 +296,27 @@ class KlineProvider:
             return False
 
     @staticmethod
+    def compute_position_20d(df: pd.DataFrame) -> float:
+        """近20日价格百分位 = (close - low_20d) / (high_20d - low_20d) * 100
+
+        Returns 0.0 if data insufficient or range is zero.
+        """
+        if df is None or df.empty:
+            return 0.0
+        high = pd.to_numeric(df["high"], errors="coerce").dropna()
+        low = pd.to_numeric(df["low"], errors="coerce").dropna()
+        close = pd.to_numeric(df["close"], errors="coerce").dropna()
+        n = min(len(high), len(low), len(close), 20)
+        if n < 5:
+            return 0.0
+        high_20d = float(high.iloc[-n:].max())
+        low_20d = float(low.iloc[-n:].min())
+        close_now = float(close.iloc[-1])
+        if high_20d <= low_20d:
+            return 0.0
+        return (close_now - low_20d) / (high_20d - low_20d) * 100
+
+    @staticmethod
     def compute_consecutive_close_rise(df: pd.DataFrame) -> int:
         """计算连续收盘上涨天数 (从最近一天往前数)
 

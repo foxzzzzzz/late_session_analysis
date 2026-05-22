@@ -21,6 +21,7 @@ class Trade:
     score_env: float = 0.0
     score_history: float = 0.0
     score_fundamental: float = 0.0
+    exit_reason: str = "next_open"  # "stop_loss" | "take_profit" | "next_open"
 
 
 @dataclass

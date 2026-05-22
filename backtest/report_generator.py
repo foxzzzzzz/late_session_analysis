@@ -54,6 +54,7 @@ class BacktestReportGenerator:
             "板块": t.sector, "尾盘分": t.score_tail,
             "技术分": t.score_tech, "资金分": t.score_capital,
             "市场分": t.score_env, "历史分": t.score_history,
+            "退出方式": t.exit_reason,
         } for t in trades])
         df.to_csv(path, index=False, encoding="utf-8-sig")
         logger.info(f"  交易明细: {path} ({len(df)} 笔)")

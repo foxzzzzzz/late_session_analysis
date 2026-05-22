@@ -11,6 +11,8 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+
+
 class BacktestDataLoader:
     def __init__(self, config):
         self.config = config
@@ -35,7 +37,11 @@ class BacktestDataLoader:
                 return cached
 
         # 尝试 akshare (仅交易时段可用)
-        result = self._load_sectors_via_akshare(sectors)
+        if _is_trading_session():
+            result = self._load_sectors_via_akshare(sectors)
+        else:
+            logger.info("非交易时段，跳过 akshare 板块获取，直接使用 baostock")
+            result = {s: [] for s in sectors}
         failed_sectors = [s for s in sectors if not result.get(s)]
 
         # baostock 降级: 对失败的板块用名称近似匹配
@@ -161,8 +167,6 @@ class BacktestDataLoader:
         ATR(14日)、MA20、阳线占比(4日)等指标计算。截断到回测日由引擎的
         _truncate_daily_bars 处理，这里只负责加载充足的历史数据。
         """
-        import baostock as bs
-
         # 历史数据起点: K线指标最长需要20日，取60自然日安全边际
         fetch_start_ts = pd.Timestamp(start_date) - pd.Timedelta(days=60)
         fetch_start = fetch_start_ts.strftime("%Y%m%d")
@@ -179,10 +183,9 @@ class BacktestDataLoader:
                     cached = pd.read_parquet(cache_file)
                     if not cached.empty:
                         cached_dates = pd.to_datetime(cached.iloc[:, 0])
-                        need_start = pd.Timestamp(fetch_start)
                         need_end = pd.Timestamp(end_date)
-                        if cached_dates.min() <= need_start and cached_dates.max() >= need_end:
-                            mask = (cached_dates >= need_start) & (cached_dates <= need_end)
+                        if cached_dates.min() <= pd.Timestamp(start_date) and cached_dates.max() >= need_end:
+                            mask = (cached_dates >= pd.Timestamp(fetch_start)) & (cached_dates <= need_end)
                             result[code] = cached[mask].reset_index(drop=True)
                             continue
                 except Exception:
@@ -196,6 +199,7 @@ class BacktestDataLoader:
             end8 = str(end_date)[:8]
             query_end = f"{end8[:4]}-{end8[4:6]}-{end8[6:8]}"
 
+            import baostock as bs
             bs.login()
             try:
                 total = len(codes_to_fetch)
@@ -210,8 +214,7 @@ class BacktestDataLoader:
                     except Exception as e:
                         logger.debug(f"日线 {code} 失败: {e}")
                     if (i + 1) % 100 == 0:
-                        logger.info(f"  日线进度: {i+1}/{total} (成功{len(result) - (len(codes_to_fetch) - i - 1)})")
-                    time.sleep(0.1)
+                        logger.info(f"  日线进度: {i+1}/{total}")
             finally:
                 try:
                     bs.logout()
@@ -224,7 +227,6 @@ class BacktestDataLoader:
     def _fetch_daily_baostock(self, code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
         """使用 baostock 获取日线数据 (调用前需确保 bs.login() 已执行)"""
         import baostock as bs
-
         bs_code = _code_to_baostock(code)
         rs = bs.query_history_k_data_plus(
             bs_code,
@@ -245,7 +247,6 @@ class BacktestDataLoader:
         df = pd.DataFrame(rows, columns=["date", "code", "open", "high", "low", "close", "volume", "amount", "turn", "pctChg"])
         for col in ["open", "high", "low", "close", "volume", "amount", "turn", "pctChg"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-        # 兼容 data_adapter 的中英文列名查找
         df["change_pct"] = df["pctChg"]
         df["turnover"] = df["amount"]
         df["turnover_rate"] = df["turn"]
@@ -578,3 +579,13 @@ def _empty_s2_metrics() -> dict:
         "last_5min_vol": 0.0,
         "late_volume": 0.0,
     }
+
+
+def _is_trading_session() -> bool:
+    """判断当前是否处于A股交易时段 (工作日 9:30-15:00)"""
+    from datetime import datetime
+    now = datetime.now()
+    if now.weekday() >= 5:
+        return False
+    t = now.hour * 100 + now.minute
+    return 930 <= t <= 1500
