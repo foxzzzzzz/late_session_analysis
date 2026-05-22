@@ -501,7 +501,12 @@ def compute_s2_metrics(df_5min: pd.DataFrame) -> dict:
     late_vol = df.loc[late_mask, turnover_col].sum() if late_mask.any() else 0
     total_vol = df[turnover_col].sum()
 
-    late_volume_ratio = late_vol / max(pre_late_vol, 1.0)
+    # 尾盘量比: (尾盘每bar成交额) / (尾盘前每bar成交额) — 时间归一化
+    late_bars = late_mask.sum()
+    pre_late_bars = max(pre_late_mask.sum(), 1)
+    late_rate = late_vol / max(late_bars, 1)
+    pre_late_rate = pre_late_vol / pre_late_bars
+    late_volume_ratio = late_rate / max(pre_late_rate, 1.0)
 
     # 14:30 价格
     bar_1430 = df[(df["_t"].dt.hour == 14) & (df["_t"].dt.minute == 30)]

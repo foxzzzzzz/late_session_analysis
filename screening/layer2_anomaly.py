@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class L2Config:
     # 尾盘放量
-    volume_ratio_min: float = 1.2        # 14:30后量 / 上午量 (原1.5，p95~1.07，下调以适配当前市场)
+    volume_ratio_min: float = 1.2        # 尾盘量比 (14:30后每bar均量 / 13:00-14:30每bar均量)
     last_5min_vol_pct_min: float = 5.0   # 最后5分钟量占比(%)
     # 价格形态
     late_rally_min: float = 2.0          # 尾盘拉升最低涨幅(%)
