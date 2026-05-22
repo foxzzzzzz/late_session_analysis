@@ -46,8 +46,8 @@ class KlineConfig:
     max_consecutive_up: int = 5         # 最多连涨天数
     max_up_in_9days: int = 6           # 近9天最多涨几天
     min_yang_ratio_4d: float = 0.75   # 近4天阳线占比最低 (3/4)
-    min_consecutive_close_rise: int = 4  # 至少连续N天收盘上涨
-    min_close_rise_pct: float = 0.5      # 连续上涨每天最低涨幅(%)
+    min_consecutive_close_rise: int = 3  # 至少连续N天收盘上涨
+    min_close_rise_pct: float = 0.3      # 连续上涨每天最低涨幅(%)
     max_single_day_pct: float = 6.5    # 单日涨幅上限(%)
     max_atr_multiple: float = 2.0      # 单日涨幅 ≤ N倍ATR
 
@@ -270,28 +270,32 @@ def _check_yang_ratio(ctx: StockContext, cfg: KlineConfig, df: pd.DataFrame) -> 
 
 
 def _check_close_momentum(ctx: StockContext, cfg: KlineConfig, df: pd.DataFrame) -> bool:
-    """近期有持续收盘上涨，每天 ≥ 0.5%"""
+    """近期存在连续N天收盘上涨 (在最近M天内扫描，不要求最近一天必涨)"""
     if cfg.min_consecutive_close_rise <= 0:
         return True
     close = pd.to_numeric(df["close"], errors="coerce").dropna()
     if len(close) < cfg.min_consecutive_close_rise + 1:
         return True
 
-    # 检查最近 N+1 天 (不包括今天, 今天还未收盘)
-    recent = close.iloc[-(cfg.min_consecutive_close_rise + 2):-1]
+    # 最近 M 天 (不包括今天), 扫描任意连续N天上涨
+    lookback = cfg.min_consecutive_close_rise + 4
+    recent = close.iloc[-(lookback + 1):-1]
     if len(recent) < cfg.min_consecutive_close_rise + 1:
         return True
 
-    up_streak = 0
-    for i in range(len(recent) - 1, 0, -1):
+    max_streak = 0
+    current_streak = 0
+    for i in range(1, len(recent)):
         prev = recent.iloc[i - 1]
         curr = recent.iloc[i]
         rise_pct = (curr - prev) / prev * 100
         if rise_pct >= cfg.min_close_rise_pct:
-            up_streak += 1
+            current_streak += 1
+            max_streak = max(max_streak, current_streak)
         else:
-            break
-    return up_streak >= cfg.min_consecutive_close_rise
+            current_streak = 0
+
+    return max_streak >= cfg.min_consecutive_close_rise
 
 
 def _check_single_day_pct(ctx: StockContext, cfg: KlineConfig) -> bool:

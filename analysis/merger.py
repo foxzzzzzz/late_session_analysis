@@ -23,6 +23,7 @@ def merge_and_rank(
     strong_buy_threshold: float = 75.0,
     buy_threshold: float = 60.0,
     watch_threshold: float = 45.0,
+    rule_scorer_cfg=None,
 ) -> list:
     """融合规则评分和LLM分析结果，重新排序
 
@@ -33,6 +34,7 @@ def merge_and_rank(
         strong_buy_threshold: 强烈买入阈值 (实盘75, 回测可调低)
         buy_threshold: 买入阈值 (实盘60)
         watch_threshold: 观察阈值 (实盘45)
+        rule_scorer_cfg: RuleScorerConfig, 规则评分参数
 
     Returns:
         按final_score降序排列的列表
@@ -41,7 +43,7 @@ def merge_and_rank(
         llm = llm_results.get(ctx.code)
         if llm is None:
             # 没有LLM结果，纯规则兜底
-            llm = _rule_fallback(ctx)
+            llm = _rule_fallback(ctx, rule_scorer_cfg)
             ctx.llm_fallback = True
         elif llm.get('fallback', False):
             # LLM调用超时或失败，已降级
@@ -87,9 +89,9 @@ def merge_and_rank(
     return contexts
 
 
-def _rule_fallback(ctx) -> dict:
+def _rule_fallback(ctx, rule_scorer_cfg=None) -> dict:
     """LLM无结果时的规则兜底"""
     from analysis.rule_scorer import rule_based_recommendation
-    result = rule_based_recommendation(ctx)
+    result = rule_based_recommendation(ctx, rule_scorer_cfg)
     result['fallback'] = True
     return result

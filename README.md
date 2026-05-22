@@ -209,8 +209,18 @@ S4 融合评分 (14:57-14:58, 每10s循环)
 | `KLINE_MAX_UP_IN_9DAYS` | 近9天最多涨几天 | `6` |
 | `KLINE_MAX_SINGLE_DAY_PCT` | 单日涨幅上限% | `6.5` |
 | `KLINE_MIN_YANG_RATIO_4D` | 近4天阳线占比最低 | `0.75` (3/4) |
-| `KLINE_MIN_CONSECUTIVE_CLOSE_RISE` | 至少连续N天收盘上涨 | `4` |
-| `KLINE_MIN_CLOSE_RISE_PCT` | 连续上涨每天最低涨幅% | `0.5` |
+| `KLINE_MIN_CONSECUTIVE_CLOSE_RISE` | 至少连续N天收盘上涨 (滑动窗口扫描) | `3` |
+| `KLINE_MIN_CLOSE_RISE_PCT` | 连续上涨每天最低涨幅% | `0.3` |
+| `KLINE_MAX_ATR_MULTIPLE` | 单日涨幅 ≤ N倍ATR | `2.0` |
+
+**Round 2 深度验证** (不通过仅标记，不淘汰):
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `KLINE_MAX_DROP_RATIO` | 涨幅骤降判定 (后一天/前一天 < N) | `0.5` |
+| `KLINE_MAX_CONSECUTIVE_DECLINE` | 连续递减天数阈值 | `3` |
+| `KLINE_MAX_CONSECUTIVE_BODY_SHRINK` | 阳线实体连续缩小天数阈值 | `3` |
+| `KLINE_MAX_UPPER_SHADOW_RATIO` | 上影线占实体比上限 | `0.6` |
 
 ### 筛选阈值
 
@@ -223,14 +233,18 @@ S4 融合评分 (14:57-14:58, 每10s循环)
 | `L1_MIN_TURNOVER` | 最小成交额 | `50000000` (5000万) |
 | `L1_MIN_TURNOVER_RATE` | 最小换手率% | `1.0` |
 | `L1_MIN_PRICE` / `L1_MAX_PRICE` | 价格区间 | `5.0` / `100.0` |
-| `L2_VOLUME_RATIO` | 下午/上午量比阈值 | `1.5` |
-| `L2_LAST5MIN_VOLUME_PCT` | 最后5分钟量占比% | `8.0` |
-| `L2_LATE_RALLY_PCT` | 尾盘(14:30→收盘)拉升% | `3.0` |
-| `L2_LATE_RECOVERY_DROP` | 企稳形态: 14:30前跌幅% | `3.0` |
-| `L2_LATE_RECOVERY_RISE` | 企稳形态: 14:45后回升% | `1.5` |
+| `L2_VOLUME_RATIO` | 尾盘量比 (14:30后/13:00-14:30) | `1.2` |
+| `L2_LAST5MIN_VOLUME_PCT` | 最后5分钟量占比% | `5.0` |
+| `L2_LATE_RALLY_PCT` | 尾盘拉升最低涨幅% | `2.0` |
+| `L2_LATE_RECOVERY_DROP` | 企稳: 14:30前跌幅% | `3.0` |
+| `L2_LATE_RECOVERY_RISE` | 企稳: 14:45后回升% | `1.5` |
 | `L2_ACTIVE_BUY_PCT` | 主动买入占比% | `55.0` |
-| `L2_REQUIRE_CAPITAL` | 资金流向作为硬门槛 | `true` |
-| `L2_MIN_PASS` | L2 最低通过数，不足时放宽资金条件 | `10` |
+| `L2_REQUIRE_CAPITAL` | 资金流向作为硬门槛 (false=仅评分使用) | `true` |
+| `L2_MIN_PASS` | L2 最低通过数，不足时自动放宽资金条件 | `10` |
+| `L2_BIG_ORDER_NET_MIN` | 大单净流入下限 (万元) | `0` |
+| `L2_BIG_ORDER_RATIO_MULT` | 尾盘大单占比 / 全天平均 | `1.3` |
+| `L2_CANCEL_RATE_MAX` | 最大撤单率% | `30.0` |
+| `L2_REQUIRE_ORDERBOOK` | 盘口数据硬门槛 (MVP阶段不启用) | `false` |
 
 ### S3 技术面验证
 
@@ -244,6 +258,97 @@ S4 融合评分 (14:57-14:58, 每10s循环)
 | `L3_VOL_RATIO_MAX` | 量比上限 | `1.8` |
 | `L3_MA5_CLOSE_RATIO_MIN` | 收盘/MA5 最低比率 (1.01/1.005/1.0分层) | `1.0` |
 | `L3_MA5_LOW_RATIO_MIN` | 最低价/MA5 最低比率 (不破MA5) | `0.98` |
+
+### L4 量化评分 — 5维阶梯参数
+
+> 所有阶梯格式为 `[[threshold, score], ...]` JSON数组，从高到低匹配。可通过 `.env` 同名变量覆盖。
+
+**评分阈值:**
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `L4_HIGH_THRESHOLD` | strong_buy 阈值 | `85.0` |
+| `L4_BUY_THRESHOLD` | buy 阈值 | `75.0` |
+| `L4_MEDIUM_THRESHOLD` | watch 下限 | `60.0` |
+| `L4_MAX_HIGH_ATTENTION` | strong_buy 最大输出数 | `15` |
+| `L4_MAX_TOTAL_OUTPUT` | 最大输出总数 | `30` |
+
+**A维度 尾盘强度 (max 30，无资金流 max 37):**
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `L4_LATE_PRICE_TIERS` | 尾盘涨幅阶梯 `[[%,分],...]` | `[[4.0,8],[2.0,6],[1.0,4],[0.0,2]]` |
+| `L4_VOL_RATIO_TIERS` | 尾盘放量倍数阶梯 | `[[3.0,8],[2.0,6],[1.5,4],[1.0,2]]` |
+| `L4_LAST5MIN_BONUS_TIERS` | 最后5分钟量占比加成 | `[[15.0,1.0],[10.0,0.5]]` |
+| `L4_BIG_ORDER_TIERS` | 大单占比阶梯 | `[[0.3,8],[0.2,6],[0.1,4]]` |
+| `L4_BIG_ORDER_NET_SCORE` | 大单净流入>0基础分 | `2.0` |
+| `L4_BID_ASK_TIERS` | 买卖挂单比阶梯 | `[[2.0,6],[1.5,4],[1.0,2]]` |
+
+**B维度 K线形态 (max 25，无资金流 max 31):**
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `L4_YANG_DAYS_TIERS` | 近4天阳线天数阶梯 | `[[4,8],[3,6],[2,4],[1,2]]` |
+| `L4_CLOSE_RISE_TIERS` | 连续收盘上涨天数阶梯 | `[[4,7],[3,5],[2,3],[1,1]]` |
+| `L4_VOLATILITY_PENALTY_TIERS` | 波动率惩罚 `[[%,扣分],...]` | `[[40,-2],[30,-1]]` |
+| `L4_BODY_AMPLIFYING_SCORE` | 实体放大得分 | `5.0` |
+| `L4_YANG_NO_AMPLIFY_SCORE` | 阳线多但未放大得分 | `2.0` |
+| `L4_BROKE_HIGH_SCORE` | 突破前高得分 | `5.0` |
+| `L4_BREAKOUT_SCORE` | 异动类型=breakout得分 | `3.0` |
+
+**C维度 资金面 (max 20，无资金流 max 0):**
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `L4_FLOW_NET_TIERS` | 主力净流入阶梯 (万元) | `[[1000,10],[500,7],[100,4]]` |
+| `L4_FLOW_NET_POSITIVE_SCORE` | 主力净流入>0基础分 | `2.0` |
+| `L4_FLOW_RATIO_SCORE` | 大单占比≥0.2加分 | `5.0` |
+| `L4_ACTIVE_BUY_TIERS` | 主动买入占比阶梯 | `[[60,5],[55,3]]` |
+| `L4_NORTHBOUND_TIERS` | 北向情绪趋势分阶梯 | `[[70,3],[55,1]]` |
+
+**D维度 均线系统 (max 15，无资金流 max 19):**
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `L4_MA_ALIGNMENT_SCORES` | 均线排列评分 `{"bullish":8,"above_ma5":5,...}` | 见.env.example |
+| `L4_MA5_ACCEL_SCORE` | MA5加速得分 | `4.0` |
+| `L4_PRICE_MA5_TIERS` | 收盘/MA5比率阶梯 | `[[1.01,3],[1.005,2],[1.0,1]]` |
+
+**E维度 市场环境 (max 10，无资金流 max 13):**
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `L4_SECTOR_PERF_TIERS` | 板块涨跌幅阶梯 | `[[3,6],[1,4],[0,2],[-1,1]]` |
+| `L4_CONCEPT_WEIGHT` | 概念分权重 (有analyzer) | `0.4` |
+| `L4_CONCEPT_MAX` | 概念分上限 (有analyzer) | `4.0` |
+| `L4_HOT_CONCEPT_PER_ITEM` | 每概念基础分 (无analyzer) | `1.5` |
+| `L4_HOT_CONCEPT_MAX` | 概念分上限 (无analyzer) | `4.0` |
+| `L4_LEADER_BONUS` | 龙头效应附加分 | `1.0` |
+
+### Rule Scorer (LLM降级规则评分)
+
+> 当LLM不可用或超时时的纯规则兜底方案。所有阶梯 `[[threshold, weight], ...]` 从高到低匹配。
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `RULE_LATE_PRICE_TIERS` | 尾盘涨幅信号阶梯 | `[[4,3],[2,2],[1,1]]` |
+| `RULE_VOL_RATIO_TIERS` | 量比信号阶梯 | `[[2.5,3],[1.5,2],[1.0,1]]` |
+| `RULE_BIG_ORDER_TIERS` | 大单信号阶梯 (ratio≥阈值且net>0) | `[[0.3,3]]` |
+| `RULE_BIG_ORDER_NET_SCORE` | 大单净流入>0基础分 | `1.0` |
+| `RULE_MA_BULLISH_SCORE` | 多头排列得分 | `2.0` |
+| `RULE_MA_GOOD_SCORE` | 技术面良好得分 | `1.0` |
+| `RULE_DECISION_TIERS` | 决策阶梯 `[[min_score,decision,confidence],...]` | `[[8,"buy","A"],[5,"buy","B"],[3,"hold","B"]]` |
+| `RULE_DEFAULT_DECISION` | 默认决策 `[decision,confidence]` | `["skip","C"]` |
+
+### Pipeline 时间窗口
+
+> S2/S3/S4 循环截止时间，到点后自动退出循环。
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `S2_WINDOW_END` | S2 尾盘异常扫描截止 | `14:55` |
+| `S3_WINDOW_END` | S3 技术面验证截止 | `14:57` |
+| `S4_WINDOW_END` | S4 融合评分截止 | `14:58` |
 
 ### 回测专用阈值
 

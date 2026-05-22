@@ -21,6 +21,7 @@ class FunnelConfig:
     l3: L3Config = None
     l4: L4Config = None
     kline: object = None  # KlineConfig, optional
+    rule_scorer: object = None  # RuleScorerConfig, optional
 
     def __post_init__(self):
         if self.l1 is None:

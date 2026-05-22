@@ -670,7 +670,7 @@ class LateSessionPipeline:
                 logger.info("S2 候选池清空，提前结束循环")
                 break
 
-            if not self._sleep_or_break("14:55", loop_interval):
+            if not self._sleep_or_break(self.config.s2_window_end, loop_interval):
                 break
 
         self.tracker.stage_end("S2_尾盘异常", len(contexts))
@@ -860,7 +860,7 @@ class LateSessionPipeline:
             scored = score_l4(l3_passed, self.funnel.config.l4, self.capital_data_date)
             self.funnel.stats['l4_count'] = len(scored)
 
-            if not self._sleep_or_break("14:57", loop_interval):
+            if not self._sleep_or_break(self.config.s3_window_end, loop_interval):
                 break
 
         top30 = self.funnel.get_top(scored, 30)
@@ -897,14 +897,17 @@ class LateSessionPipeline:
             llm_results = getattr(self, '_llm_results', {})
             # 对齐策略阈值: >85 strong_buy, 75-85 buy, 60-75 watch
             # 无LLM时 rule_weight=1.0 → final_score=total_score 直接对齐
+            rule_cfg = getattr(self.funnel.config, 'rule_scorer', None)
             if self.llm_runner:
                 top30 = merge_and_rank(top30, llm_results, rule_weight=0.7,
-                    strong_buy_threshold=80, buy_threshold=72, watch_threshold=55)
+                    strong_buy_threshold=80, buy_threshold=72, watch_threshold=55,
+                    rule_scorer_cfg=rule_cfg)
             else:
                 top30 = merge_and_rank(top30, llm_results, rule_weight=1.0,
-                    strong_buy_threshold=85, buy_threshold=75, watch_threshold=60)
+                    strong_buy_threshold=85, buy_threshold=75, watch_threshold=60,
+                    rule_scorer_cfg=rule_cfg)
 
-            if not self._sleep_or_break("14:58", loop_interval):
+            if not self._sleep_or_break(self.config.s4_window_end, loop_interval):
                 break
 
         self.tracker.stage_end("S4_评分冲刺", len(top30))
