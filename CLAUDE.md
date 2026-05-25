@@ -21,61 +21,124 @@ pytest tests/test_layer1_access.py -v
 # Run a single test function
 pytest tests/test_layer1_access.py::TestLayer1Access::test_st_stock_filtered -v
 
-# Quick test mode (run full pipeline with current market data, any time of day)
+# === 实盘管线 ===
+# Quick test mode (run full pipeline with live market data, any time of day)
 python main.py --test
 
-# Dry-run (fetch data only, no analysis or report)
+# Dry-run (fetch data only, no screening or report)
 python main.py --test --dry-run
 
 # Disable LLM, rule-scoring only
 python main.py --test --no-llm
-
-# Run specific pipeline stages only
-python main.py --test --stages 1,2
 
 # Real-time mode (only works 14:25-15:05 on trading days)
 python main.py
 
 # Scheduled mode (auto-trigger at 14:29 daily)
 python main.py --schedule
+
+# === 回测 ===
+# Full backtest with cache
+python main_backtest.py --start 20260401 --end 20260515
+
+# Cold run (disable cache)
+python main_backtest.py --start 20260401 --end 20260515 --no-cache
+
+# Override thresholds via env
+BT_KLINE_MIN_YANG_RATIO_4D=0.50 BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE=2 \
+  python main_backtest.py --start 20260301 --end 20260401
 ```
 
 ## Architecture
 
-The system is a **4-stage sequential funnel pipeline** that progressively narrows ~5000 stocks to ~5-10 actionable picks:
+The system is a **5-stage sequential funnel pipeline**:
 
 ```
-Data Providers (efinance → akshare fallback)
+S0: Sector Prefilter (同花顺涨幅排序 → Top 3-5板块 → ~1000 stocks)
     ↓
-[Stage 1] L1 (access) + L2 (anomaly): 5000 → 100-200 stocks
-[Stage 2] L3 (technical verification): 100-200 → 30-50 stocks
-[Stage 3] L4 (quantitative scoring): 30-50 → Top 30, scored 0-100
-[Stage 4] LLM analysis + rule-score merge: Top 30 → final recommendations
+S1: L1 (access) + K-line (morphology): ~1000 → 50-200 stocks
     ↓
-Jinja2 report (Markdown, optional PNG via imgkit)
+S2: L2 (anomaly) + 5-min bars: 50-200 → 15-50 stocks
+    ↓
+S3: L3 (technical) + capital flow enrichment: 15-50 → 5-25 stocks
+    ↓
+S4: L4 (scoring) + LLM merge: Top 30 → final recommendations
+    ↓
+Jinja2 Markdown report
 ```
 
-**`StockContext`** (`screening/context.py`) is the unified data structure that flows through all layers. Each layer reads/writes its own fields on the same object. Layers set `lN_passed` flags; later stages read `total_score` and `anomaly_type` from earlier layers.
+**`StockContext`** (`screening/context.py`) is the unified data structure that flows through all layers.
 
-**4 screening layers:**
-- **L1** (`layer1_access.py`): Base filters — ST/suspended/limit-up exclusion, turnover > 50M, turnover rate > 1%, price ¥5-100
-- **L2** (`layer2_anomaly.py`): Late-session anomaly detection — volume surge, price rally/breakout/stabilization, optional capital flow and orderbook checks (disabled in MVP)
-- **L3** (`layer3_technical.py`): Technical/market context — MA alignment, historical win rate, volatility, sector strength, bad news/ unlock date filtering
-- **L4** (`layer4_scoring.py`): 100-point composite score — tail strength (35%), technical (25%), capital (20%), market environment (15%), history (5%)
+### Screening layers
 
-**LLM integration** (`analysis/`): Uses LiteLLM for provider-agnostic LLM calls. Stage 4 calls LLM in parallel (ThreadPoolExecutor, max 30 workers, 15s timeout per stock). LLM results are merged with rule scores at 30/70 weight via `merger.py`. On LLM failure, `rule_scorer.py` provides a rule-based fallback — the system never blocks on LLM availability.
+- **S0** (`data_provider/sector_filter.py`): Sector prefilter — 同花顺行业涨幅排名, Top 3-5 sectors, outputs ~1000 candidates. Falls back to baostock keyword matching when akshare unavailable.
+- **L1** (`screening/layer1_access.py`): Base filters — ST/suspended/limit-up exclusion, turnover ≥ 50M, turnover rate ≥ 1%, price ¥5-100.
+- **K-line** (`screening/layer_kline.py`): 7 R1 checks (atr_range, consecutive_up, up_frequency, yang_ratio, close_momentum, single_day_pct, pct_vs_atr) + 6 R2 warnings. R1 eliminates, R2 warns only.
+- **L2** (`screening/layer2_anomaly.py`): Late-session anomaly detection — volume gate (OR) + price-pattern gate (rally/steady/breakout, OR) + capital gate (AND). require_capital=True is the default; auto-relaxes when pass < l2_min_pass.
+- **L3** (`screening/layer3_technical.py`): Technical verification — MA alignment, history_win_rate (≥60%), volatility, consecutive_limit_ups, sector rank, bad news/unlock date filtering, volume_shrinking.
+- **L4** (`screening/layer4_scoring.py`): 100-point composite — A: tail strength (30), B: K-line form (25), C: capital flow (20), D: MA system (15), E: market environment (10). When capital unavailable: C→0, others scale proportionally (A=37/B=31/D=19/E=13).
 
-**Data providers** (`data_provider/`): `DataFetcherManager` tries fetchers in priority order (efinance → akshare → pytdx). On failure, automatically degrades to the next available source. Each fetcher wraps a third-party library and normalizes output to `RealtimeQuote` dataclasses.
+### LLM integration (`analysis/`)
 
-**Preloading** (`data_provider/preloader.py`): Before the trading window, loads static data (sector mappings, sector performance) via akshare to reduce in-session latency.
+Uses LiteLLM for provider-agnostic LLM calls. Parallel execution (ThreadPoolExecutor, max 30 workers, 15s timeout per stock). LLM results merged with rule scores at 30/70 weight via `merger.py`. On LLM failure, `rule_scorer.py` provides fallback — the system never blocks on LLM availability.
 
-**Configuration** (`orchestration/config.py`): `SystemConfig` dataclass reads from environment variables (via `python-dotenv`). Screening thresholds, LLM settings, and data provider priorities are all configurable via `.env`. See `.env.example` and `LLM_config.md` for all options.
+### Data providers (`data_provider/`)
 
-**Report** (`report/`): Jinja2 templates render Markdown reports. `report.j2` is the main report template (recommendations + stats summary); `stock_card.j2` renders individual stock detail cards.
+Priority: `tencent → sector_based → sina → efinance → akshare`. Falls back on failure. Key providers:
+- **TencentFetcher**: Primary real-time quotes (PE/PB/市值), batch by 50 codes per page
+- **Preloader** (`preloader.py`): Loads static data before trading window — 同花顺行业对比, 限售解禁, 概念标签, mootdx K线. Runtime ~1.8s.
+- **KlineProvider** (`kline_provider.py`): Daily + 5-min K-line from mootdx. Includes `compute_position_20d()` for 20-day price percentile.
+- **Capital flow**: 新浪 (fund flow) + 东财 (minute flow), merged with fallback. Max enrich 300 stocks (configurable).
+- **Northbound** (`northbound.py`): 同花顺 hsgtApi 北向情绪, self-cached.
+- **Concept** (`concept_analyzer.py`): 同花顺概念频次热度分析.
+
+### Backtest system (`backtest/`)
+
+Historical replay of the full pipeline using baostock daily + 5-min bars. Key design decisions:
+- **No capital flow data** (baostock doesn't provide it) — L4 C dimension always 0, thresholds lowered to 35/25/15
+- **14:59 cutoff** on 5-min bars — captures full late session including 14:50-15:00 peak volume
+- **K-line thresholds relaxed** — yang_ratio 0.50 (vs 0.75 live), close_momentum 2 days (vs 3 live) — to generate sufficient signals for strategy validation
+- **Stop-loss/take-profit** at ±5% — priority: stop_loss > take_profit > next_open
+- **No LLM** — `llm_results={}`, `rule_weight=1.0`. LLM data would introduce lookahead bias.
+- **No S0** — uses fixed `TARGET_SECTORS` components directly (`skip_s0=True`)
+- **Sector performance backfilled** — computed from daily snapshot per sector
+- **parquet disk cache** — daily bars with date-range validity check; 5-min bar cache per stock per day
+- **Non-trading hours** — skips akshare, uses baostock directly
+
+Backtest vs live differences documented in `doc/backtest_vs_live_20260523.md`.
+
+### Configuration
+
+Three-tier hierarchy: `.env` → `SystemConfig` defaults → layer dataclass defaults.
+- **`orchestration/config.py`**: `SystemConfig` — all screening thresholds, LLM settings, data provider priorities
+- **`backtest/config.py`**: `BacktestConfig(SystemConfig)` — inherits live thresholds, overrides K-line/L4 defaults for backtest. All overrideable via `BT_*` env vars.
+
+### Key files
+
+| Path | Role |
+|------|------|
+| `main.py` | Live pipeline entry point |
+| `main_backtest.py` | Backtest entry point |
+| `orchestration/pipeline.py` | Live pipeline orchestrator (S0→S4 loop) |
+| `orchestration/config.py` | SystemConfig — all thresholds |
+| `screening/context.py` | StockContext dataclass |
+| `screening/layer_kline.py` | K-line morphology filter (R1+R2) |
+| `backtest/engine.py` | Backtest engine (day loop + S1→S4) |
+| `backtest/data_loader.py` | baostock daily/5min loader + cache |
+| `backtest/data_adapter.py` | Historical data → StockContext |
+| `backtest/config.py` | BacktestConfig with BT_* overrides |
+| `backtest/performance.py` | Win rate, Sharpe, Calmar, drawdown |
+| `backtest/report_generator.py` | CSV + JSON + Markdown export |
+| `data_provider/kline_provider.py` | mootdx K-line + position_20d |
+| `data_provider/tencent_fetcher.py` | Tencent real-time API (PE/PB/市值) |
+| `data_provider/sector_filter.py` | S0 sector prefilter |
+| `screening/layer2_anomaly.py` | L2 anomaly detection |
+| `screening/layer4_scoring.py` | L4 5-dimension scoring |
 
 ## Key Patterns
 
-- Tests use factory functions (`make_ctx(**kwargs)`) to create `StockContext` instances with sensible defaults — follow this pattern when adding new tests.
-- All screening functions are stateless: they take a list of contexts + config, return a filtered list, and set pass/fail flags on each context object.
-- MVP phase: capital flow data (`require_capital`) and orderbook data (`require_orderbook`) are disabled by default in L2 because the primary data sources don't consistently provide them.
-- LLM calls use `LLM_API_KEY` from env to determine availability. If unset, the system transparently switches to pure rule-scoring mode.
+- Tests use factory functions (`make_ctx(**kwargs)`) to create `StockContext` instances with sensible defaults.
+- All screening functions are stateless: take list of contexts + config, return filtered list, set pass/fail flags on each context.
+- Capital flow and orderbook data are optional but enabled by default. L2 auto-relaxes capital gate when pass count < `l2_min_pass`.
+- LLM calls use `LLM_API_KEY` from env. If unset, system transparently switches to pure rule-scoring mode.
+- Backtest thresholds differ from live — see `doc/backtest_vs_live_20260523.md` for the current diff.
