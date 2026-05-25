@@ -610,24 +610,21 @@ class LateSessionPipeline:
 
             # 刷新量价数据
             contexts = self._fetch_and_convert(codes)
+
+            # 5分钟K线尾盘指标 — 每轮刷新 (14:30后新bar持续生成, 指标随时间变化)
+            if self._kline_provider and codes:
+                logger.info(f"刷新 {len(codes)} 只5分钟K线...")
+                min5_cache = self._kline_provider.load_5min_batch(codes, bars=48)
+                for code, df in min5_cache.items():
+                    if not df.empty:
+                        self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
+                logger.info(f"5分钟线指标计算完成: {len(self._5min_metrics)} 只")
+
+            # 一次性应用所有富化数据 (日线 + 5分钟尾盘指标 + 板块 + 题材)
             self._enrich_contexts(contexts)
 
-            # === 首轮: 加载5分钟线 + 资金流向 ===
+            # 资金流向 — 仅首轮拉取 (数据不随时间高频变化)
             if iteration == 1:
-                # 5分钟K线 → 尾盘指标
-                # 注意: _fetch_and_convert 创建的是新 StockContext, l1_passed 为默认值 None
-                # 但所有进入 S2 的股票都已通过 S1 筛选, 直接使用全部 codes
-                if self._kline_provider and codes:
-                    logger.info(f"加载 {len(codes)} 只的5分钟K线...")
-                    min5_cache = self._kline_provider.load_5min_batch(codes, bars=48)
-                    for code, df in min5_cache.items():
-                        if not df.empty:
-                            self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
-                    logger.info(f"5分钟线指标计算完成: {len(self._5min_metrics)} 只")
-                    # 用5分钟线数据重新增强contexts
-                    self._enrich_contexts(contexts)
-
-                # 资金流向 (双源并发: 分钟线 + 新浪)
                 if self._flow_minute or self._flow_sina or self._flow_push2his:
                     self._enrich_fund_flow(contexts)
 
