@@ -382,11 +382,11 @@ class LateSessionPipeline:
                                 break
                     ctx.consecutive_limit_ups = count
 
-            # === 近10日胜率 (收盘>开盘) ===
+            # === 近5日收阳率 ===
             if ctx.code in self._daily_cache:
                 df = self._daily_cache[ctx.code]
-                if not df.empty and len(df) >= 5:
-                    recent = df.tail(10)
+                if not df.empty and len(df) >= 3:
+                    recent = df.tail(5)
                     wins = sum(
                         1 for _, row in recent.iterrows()
                         if float(row.get('close', 0)) > float(row.get('open', 0))

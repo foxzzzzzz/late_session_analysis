@@ -52,7 +52,7 @@ class BacktestEngine:
         self.l3_config = L3Config(
             require_above_ma=True,
             min_history_win_rate=self.config.l3_min_history_win,
-            max_volatility=getattr(self.config, 'l3_max_volatility', 50.0),
+            max_volatility=getattr(self.config, 'l3_max_volatility', 0.50),
             max_consecutive_limits=getattr(self.config, 'l3_max_consecutive_limits', 1),
             sector_rank_top_pct=self.config.l3_sector_rank_top_pct,
         )

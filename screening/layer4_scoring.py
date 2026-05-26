@@ -99,7 +99,7 @@ class L4Config:
         if self.close_rise_tiers is None:
             self.close_rise_tiers = [[4, 7], [3, 5], [2, 3], [1, 1]]
         if self.volatility_penalty_tiers is None:
-            self.volatility_penalty_tiers = [[40, -2], [30, -1]]
+            self.volatility_penalty_tiers = [[0.40, -2], [0.30, -1]]
         if self.flow_net_tiers is None:
             self.flow_net_tiers = [[1000, 10], [500, 7], [100, 4]]
         if self.active_buy_tiers is None:

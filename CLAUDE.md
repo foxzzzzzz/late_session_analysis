@@ -75,7 +75,7 @@ Jinja2 Markdown report
 - **L1** (`screening/layer1_access.py`): Base filters — ST/suspended/limit-up exclusion, turnover ≥ 50M, turnover rate ≥ 1%, price ¥5-100.
 - **K-line** (`screening/layer_kline.py`): 7 R1 checks (atr_range, consecutive_up, up_frequency, yang_ratio, close_momentum, single_day_pct, pct_vs_atr) + 6 R2 warnings. R1 eliminates, R2 warns only.
 - **L2** (`screening/layer2_anomaly.py`): Late-session anomaly detection — volume gate (OR) + price-pattern gate (rally/steady/breakout, OR) + capital gate (AND). require_capital=True is the default; auto-relaxes when pass < l2_min_pass.
-- **L3** (`screening/layer3_technical.py`): Technical verification — MA alignment, history_win_rate (≥60%), volatility, consecutive_limit_ups, sector rank, bad news/unlock date filtering, volume_shrinking.
+- **L3** (`screening/layer3_technical.py`): Technical verification — MA alignment, history_win_rate (≥40%, 5-day), vol_ratio [1.1,2.0], volatility ≤0.50, consecutive_limit_ups, sector rank, bad news/unlock date filtering, volume_shrinking. Returns per-condition fail distribution in logs.
 - **L4** (`screening/layer4_scoring.py`): 100-point composite — A: tail strength (30), B: K-line form (25), C: capital flow (20), D: MA system (15), E: market environment (10). When capital unavailable: C→0, others scale proportionally (A=37/B=31/D=19/E=13).
 
 ### LLM integration (`analysis/`)

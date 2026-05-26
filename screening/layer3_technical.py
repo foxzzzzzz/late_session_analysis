@@ -23,13 +23,13 @@ class L3Config:
     position_20d_bottom_pct: float = 50.0 # 近20日位置低于此百分位视为底部
     ma5_close_ratio_min: float = 1.0      # 收盘/MA5 最低比率 (1.01→1.005→1.0 分层)
     ma5_low_ratio_min: float = 0.98       # 最低价/MA5 最低比率 (不破MA5)
-    vol_ratio_min: float = 1.3            # 量比下限 (近4天量比 1.3~1.8)
-    vol_ratio_max: float = 1.8            # 量比上限
+    vol_ratio_min: float = 1.1            # 量比下限
+    vol_ratio_max: float = 2.0            # 量比上限
     # 市场情绪
     sector_rank_top_pct: float = 30.0     # 板块排名前30%
     # 历史表现
-    min_history_win_rate: float = 60.0    # 近5日胜率%
-    max_volatility: float = 50.0          # 最大波动率(年化%)
+    min_history_win_rate: float = 40.0    # 近5日收阳率(%)
+    max_volatility: float = 0.50          # 最大波动率(小数,如0.30=30%)
     max_consecutive_limits: int = 1       # 最多连续涨停天数
 
 
@@ -43,44 +43,55 @@ def screen_l3_technical(
         config = L3Config()
 
     passed = []
+    fail_reasons: dict[str, int] = {}
     for ctx in contexts:
-        ctx.l3_passed = _check_l3(ctx, config, preloader)
-        if ctx.l3_passed:
+        ok, reason = _check_l3(ctx, config, preloader)
+        ctx.l3_passed = ok
+        if ok:
             passed.append(ctx)
+        else:
+            fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
 
-    logger.info(f"L3 技术: {len(contexts)} → {len(passed)} "
-                f"({len(passed) / max(len(contexts), 1) * 100:.1f}%)")
+    total = len(contexts)
+    pass_cnt = len(passed)
+    fail_cnt = total - pass_cnt
+    logger.info(f"L3 技术: {total} → {pass_cnt} "
+                f"({pass_cnt / max(total, 1) * 100:.1f}%)")
+    if fail_reasons:
+        items = sorted(fail_reasons.items(), key=lambda x: -x[1])
+        detail = ", ".join(f"{k}={v}({v/max(fail_cnt,1)*100:.0f}%)" for k, v in items)
+        logger.info(f"L3 淘汰原因: {detail}")
     return passed
 
 
-def _check_l3(ctx, cfg: L3Config, preloader: Optional[DataPreloader]) -> bool:
-    """检查单只股票是否通过L3"""
+def _check_l3(ctx, cfg: L3Config, preloader: Optional[DataPreloader]) -> tuple:
+    """检查单只股票是否通过L3。返回 (passed: bool, reason: str)"""
     # 1. 历史胜率 (有数据时才检查)
     if ctx.history_win_rate > 0 and ctx.history_win_rate < cfg.min_history_win_rate:
-        return False
+        return False, "win_rate"
 
     # 2. 波动率适中 (有数据时才检查)
     if ctx.volatility > 0 and ctx.volatility > cfg.max_volatility:
-        return False
+        return False, "volatility"
 
     # 3. 非连续涨停板 (避免情绪过热)
     if ctx.consecutive_limit_ups > cfg.max_consecutive_limits:
-        return False
+        return False, "consecutive_limits"
 
     # 4. 风险排查
     if ctx.has_bad_news:
-        return False
+        return False, "bad_news"
     if ctx.is_unlock_date:
-        return False
+        return False, "unlock_date"
 
     # 4b. 连续缩量 > 10% (策略要求: 不允许)
     if ctx.volume_shrinking:
-        return False
+        return False, "volume_shrink"
 
     # 4c. 量比范围 (有数据时检查, Tencent实时量比)
     if ctx.vol_ratio > 0:
         if ctx.vol_ratio < cfg.vol_ratio_min or ctx.vol_ratio > cfg.vol_ratio_max:
-            return False
+            return False, "vol_ratio"
 
     # 5. 板块强度 (有数据则检查)
     if preloader is not None and ctx.sector:
@@ -114,7 +125,7 @@ def _check_l3(ctx, cfg: L3Config, preloader: Optional[DataPreloader]) -> bool:
         else:
             # 最低价跌破MA5支撑 → 不适合尾盘买入
             if cfg.require_above_ma and not tech_ok:
-                return False
+                return False, "tech_position"
 
     # 6c. 站上10日均线 → 升级ma_alignment; 完整多头排列升级为 bullish
     if ctx.ma10 > 0 and ctx.price > ctx.ma10:
@@ -136,6 +147,6 @@ def _check_l3(ctx, cfg: L3Config, preloader: Optional[DataPreloader]) -> bool:
         tech_ok = True
 
     if not tech_ok and cfg.require_above_ma:
-        return False
+        return False, "tech_position"
 
-    return True
+    return True, ""

@@ -163,8 +163,8 @@ class HistoricalDataAdapter:
             ctx.ma5_accelerating = KlineProvider.compute_ma5_acceleration(df_daily)
             ctx.volume_shrinking = KlineProvider.check_volume_shrink(df_daily)
             ctx.position_20d = KlineProvider.compute_position_20d(df_daily)
-            # 近10日胜率 (收盘>开盘)
-            recent = df_daily.tail(10)
+            # 近5日收阳率
+            recent = df_daily.tail(5)
             wins = sum(
                 1 for _, r in recent.iterrows()
                 if float(r.get('close', 0)) > float(r.get('open', 0))

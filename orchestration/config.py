@@ -47,9 +47,9 @@ class SystemConfig:
     l2_require_orderbook: bool = False  # 盘口数据作为硬门槛 (MVP阶段不启用)
 
     l3_sector_rank_top_pct: float = 30.0
-    l3_min_history_win: float = 60.0
-    l3_vol_ratio_min: float = 1.3       # 量比下限 (近4天量比 1.3~1.8)
-    l3_vol_ratio_max: float = 1.8       # 量比上限
+    l3_min_history_win: float = 40.0  # 近5日收阳率最低要求(%)
+    l3_vol_ratio_min: float = 1.1       # 量比下限
+    l3_vol_ratio_max: float = 2.0       # 量比上限
     l3_ma5_close_ratio_min: float = 1.0  # 收盘/MA5 最低比率
     l3_ma5_low_ratio_min: float = 0.98   # 最低价/MA5 最低比率
 
@@ -70,7 +70,7 @@ class SystemConfig:
     # === L4 B维度: K线形态 (max 25) ===
     l4_yang_days_tiers: str = '[[4,8],[3,6],[2,4],[1,2]]'                    # 近4天阳线天数阶梯
     l4_close_rise_tiers: str = '[[4,7],[3,5],[2,3],[1,1]]'                   # 连续收盘上涨天数阶梯
-    l4_volatility_penalty_tiers: str = '[[40,-2],[30,-1]]'                   # 波动率惩罚阶梯 [阈值,扣分]
+    l4_volatility_penalty_tiers: str = '[[0.40,-2],[0.30,-1]]'               # 波动率惩罚阶梯 [阈值(小数,如0.30=30%),扣分]
     l4_body_amplifying_score: float = 5.0                                     # 实体放大得分
     l4_yang_no_amplify_score: float = 2.0                                     # 阳线多但未放大得分
     l4_broke_high_score: float = 5.0                                          # 突破前高得分
