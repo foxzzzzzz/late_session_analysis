@@ -83,14 +83,16 @@ class TestLayer4Scoring:
         assert ctx.recommendation == 'strong_buy'
         assert ctx.total_score > 85
 
-    def test_no_capital_redistributes(self):
-        """无资金流时C维度归零，A/B/D/E得分放大"""
-        ctx = make_ctx()
-        # 无资金流
-        score_l4([ctx], capital_data_date='none')
-        assert ctx.score_capital == 0.0
-        # A维度应放大到 >30 (max 37)
-        assert ctx.score_tail_strength > 20
+    def test_no_capital_data_scores_normally(self):
+        """无资金流数据时C维度自然低分，不再调权重"""
+        # 无资金流数据: big_order_net=0, big_order_ratio=0
+        ctx = make_ctx(big_order_net=0, big_order_ratio=0, active_buy_ratio=50.0,
+                       bid_vol=0, ask_vol=0)
+        score_l4([ctx])
+        # C维度自然低分 (只有北向/主动买入可能有微弱分)
+        assert ctx.score_capital < 5.0
+        # A/B/D/E 使用标准满分 (不放大)
+        assert ctx.score_tail_strength <= 30  # 标准满分30, 不放大到37
 
     def test_recommendation_tiers(self):
         """验证各级别判定阈值"""

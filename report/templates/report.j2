@@ -9,17 +9,17 @@
 {% if stats.capital_data_date == 'yesterday' %}
 ## ⚠️ 数据提示：资金流向使用昨日数据
 
-> **资金流向数据来自昨日** — 今日实时数据源(东方财富 push2his)不可达，
-> 已自动降级使用昨日主力净流入。L4 评分中的资金面信号有一定滞后性。
+> **资金流向数据来自昨日** — 当日实时数据源(东方财富 push2his)不可达，
+> 已自动降级使用昨日主力净流入。C维度(资金面)信号滞后，推荐阈值已自动下调。
 
 ---
 
 {% elif not stats.capital_data_available and not stats.llm_disabled %}
 ## ⚠️ 重要提示：资金流向数据不可用
 
-> **资金流向数据完全缺失** — 今日实时及昨日降级数据源均不可达。
-> L4 评分中的资金面权重已自动重新分配到尾盘强度和技术面，
-> 信号可靠性低于实盘。建议在交易时段重新运行。
+> **资金流向数据完全缺失** — 当日实时及昨日降级数据源均不可达。
+> C维度(资金面)归零，推荐阈值已自动下调补偿。
+> 信号可靠性低于实盘，建议在交易时段重新运行。
 
 ---
 
@@ -29,11 +29,11 @@
 
 {% if stats.llm_disabled %}
 > **LLM功能已禁用** — 本报告所有推荐**仅基于规则评分引擎**生成，
-> 未经过AI模型综合研判。
+> 未经过AI模型综合研判，推荐阈值已自动下调。
 {% else %}
 > **{{ stats.llm_api_success }}/{{ stats.llm_total }} 只API调用成功**
 > ({{ stats.llm_buy_signals }} 只LLM建议买入)
-> {% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只超时降级为规则评分{% endif %}。
+> {% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只超时降级为规则评分，阈值已相应调整{% endif %}。
 > 标记为 `[规则]` 的标的**未经过AI模型验证**，信号可靠性降低。
 {% endif %}
 
@@ -55,7 +55,7 @@
 | 当前价 | {{ "%.2f"|format(stock.price) }} | 涨跌幅 | {{ "%+.2f%%"|format(stock.change_pct) }} |
 | 尾盘涨幅 | {{ "%+.2f%%"|format(stock.late_price_change) }} | 异动类型 | {{ stock.anomaly_type }} |
 | 量比(午后/上午) | {{ "%.1f"|format(stock.afternoon_volume_ratio) }}x | 换手率 | {{ "%.1f%%"|format(stock.turnover_rate) }} |
-| 大单流入 | {{ "%.0f"|format(stock.big_order_net/1e4) }}万 | 评分 | {{ "%.0f"|format(stock.total_score) }}/100 |
+| 大单流入 | {{ "%.0f"|format(stock.big_order_net/1e4) }}万 | 评分 | A{{"%.0f"|format(stock.score_tail_strength)}} B{{"%.0f"|format(stock.score_technical)}} C{{"%.0f"|format(stock.score_capital)}} D{{"%.0f"|format(stock.score_ma_system)}} E{{"%.0f"|format(stock.score_market_env)}} → {{"%.0f"|format(stock.total_score)}}/100 |
 | LLM决策 | {{ stock.llm_decision }} ({{ stock.llm_confidence }}) | LLM理由 | {{ stock.llm_reason }} |
 
 {% endfor %}

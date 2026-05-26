@@ -121,28 +121,15 @@ def score_l4(
 ) -> list:
     """L4 量化评分 (5维直接累加, 满分100)
 
-    Args:
-        capital_data_date: "today"=当日资金流可用, 否则不可用
-
     Returns:
         按 total_score 降序排列, 设置 recommendation 字段
     """
     if config is None:
         config = L4Config()
 
-    has_capital = (
-        capital_data_date == "today"
-        and any(
-            ctx.big_order_net != 0 or ctx.big_order_ratio > 0
-            for ctx in contexts
-        )
-    )
-
-    # 评分模式: 有资金流→标准5维, 无资金流→C归零其余等比放大
-    if has_capital:
-        max_a, max_b, max_c, max_d, max_e = 30, 25, 20, 15, 10
-    else:
-        max_a, max_b, max_c, max_d, max_e = 37, 31, 0, 19, 13
+    # 始终使用标准5维权重, 满分100
+    # 资金流不可用时C维度各项子分自然为0, 降级阈值由 merge_and_rank 处理
+    max_a, max_b, max_c, max_d, max_e = 30, 25, 20, 15, 10
 
     for ctx in contexts:
         s_a = _score_tail_strength(ctx, max_a, config)
@@ -154,8 +141,9 @@ def score_l4(
         ctx.score_tail_strength = s_a
         ctx.score_technical = s_b       # 兼容旧字段名
         ctx.score_capital = s_c
+        ctx.score_ma_system = s_d
         ctx.score_market_env = s_e
-        ctx.score_history = _score_ma_system(ctx, max_d, config)  # 兼容
+        ctx.score_history = s_d         # 兼容旧字段名
 
         ctx.total_score = s_a + s_b + s_c + s_d + s_e
 

@@ -89,7 +89,8 @@ class StockContext:
     score_technical: float = 0.0        # 技术面(25%)
     score_capital: float = 0.0          # 资金面(20%)
     score_market_env: float = 0.0       # 市场环境(15%)
-    score_history: float = 0.0          # 历史胜率(5%)
+    score_ma_system: float = 0.0        # D: 均线系统(15)
+    score_history: float = 0.0          # 历史胜率(5%)  ← 兼容旧名,同score_ma_system
     total_score: float = 0.0            # 综合评分
 
     # === LLM分析结果 ===

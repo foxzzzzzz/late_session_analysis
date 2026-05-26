@@ -117,6 +117,8 @@ class TencentFetcher(BaseFetcher):
                     code=code,
                     name=name,
                     price=price,
+                    bid_vol=_sf(vals[8]) * 100,    # 买一量(手→股)
+                    ask_vol=_sf(vals[10]) * 100,   # 卖一量(手→股)
                     change_pct=_sf(vals[32]),
                     turnover=_sf(vals[37]) * 10000,  # 万→元
                     turnover_rate=_sf(vals[38]),

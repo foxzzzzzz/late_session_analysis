@@ -292,6 +292,8 @@ class LateSessionPipeline:
                 pb=q.pb,
                 vol_ratio=q.vol_ratio,
                 amplitude=q.amplitude,
+                bid_vol=q.bid_vol,
+                ask_vol=q.ask_vol,
             )
             contexts.append(ctx)
         return contexts
@@ -894,16 +896,31 @@ class LateSessionPipeline:
                 self._llm_done = True
 
             llm_results = getattr(self, '_llm_results', {})
-            # 对齐策略阈值: >85 strong_buy, 75-85 buy, 60-75 watch
-            # 无LLM时 rule_weight=1.0 → final_score=total_score 直接对齐
+            capital_ok = (self.capital_data_date == 'today')
+            llm_ok = (self.llm_runner is not None
+                      and any(not r.get('fallback', False) for r in llm_results.values()))
+
             rule_cfg = getattr(self.funnel.config, 'rule_scorer', None)
-            if self.llm_runner:
+
+            if capital_ok and llm_ok:
+                # 完整数据: LLM融合, 标准阈值
                 top30 = merge_and_rank(top30, llm_results, rule_weight=0.7,
                     strong_buy_threshold=80, buy_threshold=72, watch_threshold=55,
                     rule_scorer_cfg=rule_cfg)
-            else:
+            elif capital_ok and not llm_ok:
+                # 缺LLM: 纯规则, 阈值略降
                 top30 = merge_and_rank(top30, llm_results, rule_weight=1.0,
-                    strong_buy_threshold=85, buy_threshold=75, watch_threshold=60,
+                    strong_buy_threshold=75, buy_threshold=65, watch_threshold=50,
+                    rule_scorer_cfg=rule_cfg)
+            elif not capital_ok and llm_ok:
+                # 缺资金流: LLM融合, 阈值下调补偿C维度
+                top30 = merge_and_rank(top30, llm_results, rule_weight=0.7,
+                    strong_buy_threshold=72, buy_threshold=62, watch_threshold=48,
+                    rule_scorer_cfg=rule_cfg)
+            else:
+                # 资金流+LLM都缺: 纯规则, 最大降幅
+                top30 = merge_and_rank(top30, llm_results, rule_weight=1.0,
+                    strong_buy_threshold=65, buy_threshold=55, watch_threshold=40,
                     rule_scorer_cfg=rule_cfg)
 
             if not self._sleep_or_break(self.config.s4_window_end, loop_interval):
