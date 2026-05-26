@@ -80,8 +80,13 @@ class BacktestConfig(SystemConfig):
         self.kline_min_consecutive_close_rise = int(os.getenv("BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE", "2"))
         self.kline_min_close_rise_pct = float(os.getenv("BT_KLINE_MIN_CLOSE_RISE_PCT", str(self.kline_min_close_rise_pct)))
 
-        # 回测 L4 推荐阈值 — 低于实盘值，因为回测无资金流向数据(占20%权重)
+        # 回测 L4 推荐阈值 — 回测缺资金流+LLM+盘口, 实际上限~67分
+        # 按实盘"资金❌+LLM❌"场景(65/55/40)等比折算: 55/48/38
         # 可通过 BT_L4_* 环境变量覆盖
-        self.l4_strong_buy = float(os.getenv("BT_L4_STRONG_BUY", "35.0"))
-        self.l4_buy = float(os.getenv("BT_L4_BUY", "25.0"))
-        self.l4_watch = float(os.getenv("BT_L4_WATCH", "15.0"))
+        self.l4_strong_buy = float(os.getenv("BT_L4_STRONG_BUY", "55.0"))
+        self.l4_buy = float(os.getenv("BT_L4_BUY", "48.0"))
+        self.l4_watch = float(os.getenv("BT_L4_WATCH", "38.0"))
+
+        # 回测 L3 波动率 — 放宽至0.60 (实盘0.50)
+        # 回测波动率从20日日线计算, 0.50对尾盘策略偏紧
+        self.l3_max_volatility = float(os.getenv("BT_L3_MAX_VOLATILITY", "0.60"))

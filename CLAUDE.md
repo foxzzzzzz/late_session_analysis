@@ -95,7 +95,9 @@ Priority: `tencent → sector_based → sina → efinance → akshare`. Falls ba
 ### Backtest system (`backtest/`)
 
 Historical replay of the full pipeline using baostock daily + 5-min bars. Key design decisions:
-- **No capital flow data** (baostock doesn't provide it) — L4 C dimension always 0, thresholds lowered to 35/25/15
+- **Synthetic data estimation** (`backtest/synthetic_data.py`) — capital flow (big_order_net/ratio, active_buy_ratio) estimated from 5-min bar direction×amount; bid_vol/ask_vol from last bar's close position; concepts from sector name. L4 C dimension no longer zero.
+- **L4 thresholds** — strong_buy≥55, buy≥48, watch≥38. Scores with synthetic data typically range 40-70 (vs 30-39 without).
+- **L3 volatility relaxed** — max_volatility 0.60 (vs 0.50 live), reduces volatility eliminations in backtest
 - **14:59 cutoff** on 5-min bars — captures full late session including 14:50-15:00 peak volume
 - **K-line thresholds relaxed** — yang_ratio 0.50 (vs 0.75 live), close_momentum 2 days (vs 3 live) — to generate sufficient signals for strategy validation
 - **Stop-loss/take-profit** at ±5% — priority: stop_loss > take_profit > next_open
@@ -129,6 +131,7 @@ Three-tier hierarchy: `.env` → `SystemConfig` defaults → layer dataclass def
 | `backtest/config.py` | BacktestConfig with BT_* overrides |
 | `backtest/performance.py` | Win rate, Sharpe, Calmar, drawdown |
 | `backtest/report_generator.py` | CSV + JSON + Markdown export |
+| `backtest/synthetic_data.py` | Synthetic capital flow / order book / concept estimation from 5-min bars |
 | `data_provider/kline_provider.py` | mootdx K-line + position_20d |
 | `data_provider/tencent_fetcher.py` | Tencent real-time API (PE/PB/市值) |
 | `data_provider/sector_filter.py` | S0 sector prefilter |

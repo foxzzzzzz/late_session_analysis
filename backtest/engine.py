@@ -52,7 +52,7 @@ class BacktestEngine:
         self.l3_config = L3Config(
             require_above_ma=True,
             min_history_win_rate=self.config.l3_min_history_win,
-            max_volatility=getattr(self.config, 'l3_max_volatility', 0.50),
+            max_volatility=getattr(self.config, 'l3_max_volatility', 0.60),
             max_consecutive_limits=getattr(self.config, 'l3_max_consecutive_limits', 1),
             sector_rank_top_pct=self.config.l3_sector_rank_top_pct,
         )
@@ -403,6 +403,21 @@ class BacktestEngine:
 
         # L4 评分
         scored = score_l4(contexts, self.l4_config)
+
+        # 诊断: 输出各维度得分分布
+        if scored:
+            scores = [c.total_score for c in scored]
+            logger.info(
+                f"[{date_str}] L4得分: min={min(scores):.0f} max={max(scores):.0f} "
+                f"avg={sum(scores)/len(scores):.0f} n={len(scores)}"
+            )
+            for c in scored:
+                logger.debug(
+                    f"[{date_str}] L4 {c.code} {c.name}: "
+                    f"A尾盘={c.score_tail_strength:.1f} B形态={c.score_technical:.1f} "
+                    f"C资金={c.score_capital:.1f} D均线={c.score_ma_system:.1f} "
+                    f"E环境={c.score_market_env:.1f} → {c.total_score:.1f}"
+                )
 
         # 取 Top 30
         sorted_ctx = sorted(scored, key=lambda c: c.total_score, reverse=True)

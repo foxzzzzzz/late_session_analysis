@@ -6,6 +6,7 @@ import pandas as pd
 
 from screening.context import StockContext
 from backtest.data_loader import compute_s2_metrics
+from backtest.synthetic_data import estimate_capital_flow, estimate_order_book, estimate_concepts
 
 logger = logging.getLogger(__name__)
 
@@ -142,9 +143,22 @@ class HistoricalDataAdapter:
             total_bars = len(df_5min)
             if total_bars > 0:
                 ctx.avg_period_volume = s2["total_vol"] / total_bars
+
+            # 合成数据: 从5分钟K线估算缺失的资金流/盘口指标
+            cap = estimate_capital_flow(df_5min)
+            ctx.big_order_net = cap["big_order_net"]
+            ctx.big_order_ratio = cap["big_order_ratio"]
+            ctx.active_buy_ratio = cap["active_buy_ratio"]
+
+            bid_vol, ask_vol = estimate_order_book(df_5min)
+            ctx.bid_vol = bid_vol
+            ctx.ask_vol = ask_vol
         else:
             # 无5分钟线: S2指标留空(0)，不生成虚假信号
             pass
+
+        # 概念标签: 板块名作为最小标签
+        ctx.hot_concepts = estimate_concepts(ctx.code, ctx.sector)
 
         # === L3 技术面: 从日线历史精确计算 ===
         df_daily = daily_bars.get(code) if daily_bars else None
