@@ -41,6 +41,46 @@
 
 {% endif %}
 
+{% if market_overview["indices"] or market_overview["breadth"]["up"] > 0 %}
+## 📊 大盘概况
+
+{% if market_overview["indices"] %}
+### 主要指数
+
+| 指数 | 当前点位 | 涨跌幅 | 涨跌额 |
+|------|---------|--------|--------|
+{% for idx in market_overview["indices"] %}
+| {{ idx["name"] }} | {{ "%.2f"|format(idx["close"]) }} | {{ "%+.2f%%"|format(idx["change_pct"]) }} | {{ "%+.2f"|format(idx["change_amt"]) }} |
+{% endfor %}
+
+{% endif %}
+{% if market_overview["breadth"]["up"] > 0 %}
+### 市场宽度
+
+上涨 **{{ market_overview["breadth"]["up"] }}** 家 | 下跌 **{{ market_overview["breadth"]["down"] }}** 家 | 平盘 **{{ market_overview["breadth"]["flat"] }}** 家
+涨跌比 **{{ market_overview["breadth"]["ratio"] }} : 1** ({{ market_overview["breadth"]["bias"] }})
+
+{% endif %}
+{% if market_overview["hot_sectors"] %}
+### 热点板块 Top5
+
+| 排名 | 板块 | 涨幅 |
+|------|------|------|
+{% for sector, pct in market_overview["hot_sectors"] %}
+| {{ loop.index }} | {{ sector }} | {{ "%+.2f%%"|format(pct) }} |
+{% endfor %}
+
+{% endif %}
+{% if stats.concept_total > 0 %}
+### 热门题材
+
+{{ stats.concept_total }} 个活跃题材 | {{ stats.concept_occurrences }} 次标签匹配
+- Top5: {% for c in stats.concept_top5 %}{{ c[0] }}({{ c[1] }}){% if not loop.last %}, {% endif %}{% endfor %}
+
+{% endif %}
+---
+
+{% endif %}
 ## 📈 最终推荐
 
 {% for stock in strong_buy %}
@@ -107,9 +147,3 @@
 **昨日北向资金**: 数据不可用
 {% endif %}
 
-{% if stats.concept_total > 0 %}
-**题材热度**: {{ stats.concept_total }} 个活跃题材 | {{ stats.concept_occurrences }} 次标签匹配
-{% if stats.concept_top5 %}
-- 热门题材 Top5: {% for c in stats.concept_top5 %}{{ c[0] }}({{ c[1] }}){% if not loop.last %}, {% endif %}{% endfor %}
-{% endif %}
-{% endif %}

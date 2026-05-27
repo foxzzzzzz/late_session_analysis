@@ -243,6 +243,9 @@ class LateSessionPipeline:
 
             self.tracker.finish()
 
+            # 大盘概况 (S4结束后拉取，越晚越接近收盘价)
+            self.market_overview = self._fetch_market_overview()
+
             # 生成报告
             return self._generate_report(top30)
 
@@ -737,8 +740,22 @@ class LateSessionPipeline:
             f"资金流向: 分钟线={n_minute} 新浪={n_sina} push2his={n_his}"
         )
 
-        # 保存原始数据供 S3 回填
-        self._fund_flow_data = minute_data or sina_data or push2his_data
+        # 保存合并数据供 S3 回填 (三个源都可能有部分股票，合并而非二选一)
+        self._fund_flow_data = {}
+        all_codes = set()
+        all_codes.update(minute_data.keys())
+        all_codes.update(sina_data.keys())
+        all_codes.update(push2his_data.keys())
+        for code in all_codes:
+            md = minute_data.get(code, {})
+            sd = sina_data.get(code, {})
+            hd = push2his_data.get(code, {})
+            # 合并: mainForce 优先分钟线, active_buy_ratio 始终从新浪取
+            self._fund_flow_data[code] = {
+                "mainForce": md.get("mainForce") or sd.get("mainForce") or hd.get("mainForce") or 0,
+                "active_buy_ratio": sd.get("active_buy_ratio") or hd.get("active_buy_ratio", 50.0),
+                "data_date": sd.get("data_date") or hd.get("data_date") or md.get("data_date", ""),
+            }
 
         today_count = 0
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -930,6 +947,81 @@ class LateSessionPipeline:
         return top30
 
     # ============================================================
+    # 大盘概况
+    # ============================================================
+
+    def _fetch_market_overview(self) -> dict:
+        """拉取大盘概况: 三大指数 + 涨跌家数 + 热点板块 (S4结束后调用，越晚越准)"""
+        result = {
+            "indices": [],
+            "breadth": {"up": 0, "down": 0, "flat": 0, "ratio": 0, "bias": ""},
+            "hot_sectors": [],
+        }
+
+        # 1. 三大指数 (mootdx category=4 日线)
+        try:
+            from mootdx.quotes import Quotes
+            index_targets = [
+                ("000001", "上证指数"),
+                ("399001", "深证成指"),
+                ("399006", "创业板指"),
+            ]
+            for code, name in index_targets:
+                try:
+                    df = self._kline_provider._client.bars(symbol=code, category=4, offset=1)
+                    if df is not None and not df.empty:
+                        row = df.iloc[-1]
+                        close = float(row.get("close", 0))
+                        last_close = float(row.get("last_close", 0)) or float(row.get("open", 0))
+                        change_pct = (close - last_close) / last_close * 100 if last_close else 0
+                        change_amt = close - last_close
+                        result["indices"].append({
+                            "name": name, "close": close,
+                            "change_pct": change_pct, "change_amt": change_amt,
+                        })
+                except Exception as e:
+                    logger.warning(f"获取指数 {name}({code}) 失败: {e}")
+        except Exception as e:
+            logger.warning(f"指数数据获取失败: {e}")
+
+        # 2. 涨跌家数 (全市场扫描)
+        try:
+            import akshare as ak
+            df = ak.stock_zh_a_spot()
+            if df is not None and not df.empty:
+                chg_col = "涨跌幅" if "涨跌幅" in df.columns else None
+                if chg_col:
+                    up = int((df[chg_col] > 0).sum())
+                    down = int((df[chg_col] < 0).sum())
+                    flat = len(df) - up - down
+                    result["breadth"]["up"] = up
+                    result["breadth"]["down"] = down
+                    result["breadth"]["flat"] = flat
+                    result["breadth"]["ratio"] = round(up / max(down, 1), 2)
+                    if result["breadth"]["ratio"] >= 1.5:
+                        result["breadth"]["bias"] = "偏多"
+                    elif result["breadth"]["ratio"] >= 1.0:
+                        result["breadth"]["bias"] = "中性偏多"
+                    elif result["breadth"]["ratio"] >= 0.67:
+                        result["breadth"]["bias"] = "中性偏空"
+                    else:
+                        result["breadth"]["bias"] = "偏空"
+                    logger.info(f"市场宽度: 涨{up} 跌{down} 平{flat} 比{result['breadth']['ratio']}:1 ({result['breadth']['bias']})")
+        except Exception as e:
+            logger.warning(f"涨跌家数获取失败: {e}")
+
+        # 3. 热点板块 Top5 (从 preloader 缓存读取)
+        try:
+            if self.preloader and self.preloader.sector_performance:
+                sectors = sorted(self.preloader.sector_performance.items(),
+                                 key=lambda x: x[1], reverse=True)
+                result["hot_sectors"] = sectors[:5]
+        except Exception as e:
+            logger.warning(f"热点板块获取失败: {e}")
+
+        return result
+
+    # ============================================================
     # 报告生成
     # ============================================================
 
@@ -987,6 +1079,7 @@ class LateSessionPipeline:
             watch_stocks=watch_stocks,
             stats=stats,
             data_source=self.fetcher_mgr.get_active_name(),
+            market_overview=getattr(self, 'market_overview', None),
         )
 
         path = save_report(md, self.config.report_output_dir)

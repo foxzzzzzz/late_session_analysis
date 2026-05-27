@@ -154,7 +154,7 @@ class SystemConfig:
 
     # === 调度 ===
     schedule_enabled: bool = False
-    schedule_time: str = "14:25"
+    schedule_time: str = "14:35"
 
     def __post_init__(self):
         self._load_from_env()

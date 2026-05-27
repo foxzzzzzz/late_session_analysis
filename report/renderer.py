@@ -20,6 +20,7 @@ def render_report(
     watch_stocks: list,
     stats: dict,
     data_source: str = "",
+    market_overview: dict = None,
 ) -> str:
     """渲染主报告为Markdown"""
     env = get_jinja_env()
@@ -34,6 +35,7 @@ def render_report(
         buy_stocks=buy_stocks,
         watch_stocks=watch_stocks,
         stats=stats,
+        market_overview=market_overview or {},
     )
 
 
