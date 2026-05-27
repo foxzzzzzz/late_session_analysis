@@ -48,6 +48,7 @@ class SystemConfig:
 
     l3_sector_rank_top_pct: float = 30.0
     l3_min_history_win: float = 40.0  # 近5日收阳率最低要求(%)
+    l3_max_volatility: float = 0.60   # 最大波动率(20日标准差, 小数)
     l3_vol_ratio_min: float = 1.1       # 量比下限
     l3_vol_ratio_max: float = 2.0       # 量比上限
     l3_ma5_close_ratio_min: float = 1.0  # 收盘/MA5 最低比率
@@ -207,6 +208,7 @@ class SystemConfig:
         self.l3_min_history_win = float(os.getenv("L3_HISTORY_WIN_RATE", str(self.l3_min_history_win)))
         self.l3_vol_ratio_min = float(os.getenv("L3_VOL_RATIO_MIN", str(self.l3_vol_ratio_min)))
         self.l3_vol_ratio_max = float(os.getenv("L3_VOL_RATIO_MAX", str(self.l3_vol_ratio_max)))
+        self.l3_max_volatility = float(os.getenv("L3_MAX_VOLATILITY", str(self.l3_max_volatility)))
         self.l3_ma5_close_ratio_min = float(os.getenv("L3_MA5_CLOSE_RATIO_MIN", str(self.l3_ma5_close_ratio_min)))
         self.l3_ma5_low_ratio_min = float(os.getenv("L3_MA5_LOW_RATIO_MIN", str(self.l3_ma5_low_ratio_min)))
 
@@ -352,6 +354,7 @@ class SystemConfig:
             'l3': L3Config(
                 sector_rank_top_pct=self.l3_sector_rank_top_pct,
                 min_history_win_rate=self.l3_min_history_win,
+                max_volatility=self.l3_max_volatility,
                 vol_ratio_min=self.l3_vol_ratio_min,
                 vol_ratio_max=self.l3_vol_ratio_max,
                 ma5_close_ratio_min=self.l3_ma5_close_ratio_min,

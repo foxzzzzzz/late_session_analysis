@@ -850,7 +850,7 @@ class LateSessionPipeline:
                         self.northbound_sentiment = nb
                 if self.northbound_sentiment.get("available"):
                     logger.info(
-                        f"北向资金: 净买入 {self.northbound_sentiment['today_net_yi']}亿, "
+                        f"昨日北向资金: 净买入 {self.northbound_sentiment['today_net_yi']}亿, "
                         f"趋势分 {self.northbound_sentiment['trend_score']:.0f}"
                     )
 

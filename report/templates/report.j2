@@ -102,9 +102,9 @@
 **资金流向**: {% if stats.capital_data_date == 'today' %}今日实时数据{% elif stats.capital_data_date == 'yesterday' %}⚠️ 昨日降级数据{% else %}不可用{% endif %}
 
 {% if stats.northbound_available %}
-**北向资金**: 净买入 {{ "%.1f"|format(stats.northbound_today_net) }}亿 | 趋势分 {{ "%.0f"|format(stats.northbound_trend) }} | 情绪: {{ stats.northbound_label }}
+**昨日北向资金**: 净买入 {{ "%.1f"|format(stats.northbound_today_net) }}亿 | 趋势分 {{ "%.0f"|format(stats.northbound_trend) }} | 情绪: {{ stats.northbound_label }}
 {% else %}
-**北向资金**: 数据不可用 (非交易时段)
+**昨日北向资金**: 数据不可用
 {% endif %}
 
 {% if stats.concept_total > 0 %}

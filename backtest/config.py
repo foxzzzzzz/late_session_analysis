@@ -87,6 +87,5 @@ class BacktestConfig(SystemConfig):
         self.l4_buy = float(os.getenv("BT_L4_BUY", "48.0"))
         self.l4_watch = float(os.getenv("BT_L4_WATCH", "38.0"))
 
-        # 回测 L3 波动率 — 放宽至0.60 (实盘0.50)
-        # 回测波动率从20日日线计算, 0.50对尾盘策略偏紧
-        self.l3_max_volatility = float(os.getenv("BT_L3_MAX_VOLATILITY", "0.60"))
+        # 回测 L3 波动率 — 继承实盘值 (默认0.60), 可通过 BT_L3_MAX_VOLATILITY 独立覆盖
+        self.l3_max_volatility = float(os.getenv("BT_L3_MAX_VOLATILITY", str(self.l3_max_volatility)))

@@ -1,5 +1,6 @@
-"""北向资金情绪 — 同花顺 hsgtApi 实时分钟流向 + 本地自缓存
+"""北向资金情绪 — 同花顺 hsgtApi 上一交易日数据 + 本地自缓存
 
+注意: dayChart 端点返回最近完整交易日数据(非当日实时)，盘中调用也是昨日数据。
 数据源: data.hexin.cn/market/hsgtApi/method/dayChart/
 自缓存: ~/.tradingagents/cache/northbound_daily.csv (收盘后自动写入)
 """
@@ -70,10 +71,10 @@ def _save_snapshot(date: str, hgt: float, sgt: float):
 
 
 def fetch_northbound_realtime() -> Optional[dict]:
-    """拉取当日北向资金实时分钟流向
+    """拉取最近完整交易日北向资金分钟数据 (非当日实时，T+1滞后)
 
     Returns:
-        dict with keys: today_net_yi (当日累计净买入), hgt_yi, sgt_yi,
+        dict with keys: today_net_yi (最近交易日累计净买入), hgt_yi, sgt_yi,
                         trend_score (近N日趋势), points (分钟数据点数),
                         recent_days (近N日每日净买入)
         失败返回 None
@@ -102,6 +103,16 @@ def fetch_northbound_realtime() -> Optional[dict]:
                 break
 
         today_net = today_hgt + today_sgt
+
+        # 调试: 打印API返回的时间范围，确认是哪天的数据
+        first_time = times[0] if times else "N/A"
+        last_time = times[-1] if times else "N/A"
+        logger.info(
+            f"北向API返回: times={first_time}~{last_time}, "
+            f"points={len(times)}, "
+            f"hgt末值={today_hgt:.2f}, sgt末值={today_sgt:.2f}, "
+            f"net={today_net:.2f}"
+        )
 
         # 加载历史计算趋势
         hist = _load_history(20)

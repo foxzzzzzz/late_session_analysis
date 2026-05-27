@@ -58,6 +58,7 @@ def screen_l2_anomaly(
     vol_ratios = []
     last5_pcts = []
     late_changes = []
+    active_buy_ratios = []   # 全部股票的 active_buy_ratio (含0值)
     for ctx in contexts:
         ctx.l2_passed, fail_reason = _check_l2(ctx, config, has_depth_data, has_capital_data)
         if fail_reason:
@@ -70,6 +71,8 @@ def screen_l2_anomaly(
         vol_ratios.append(ctx.late_volume_ratio)
         last5_pcts.append(ctx.last_5min_volume_pct)
         late_changes.append(ctx.late_price_change)
+        if ctx.active_buy_ratio > 0:
+            active_buy_ratios.append(ctx.active_buy_ratio)
         if ctx.l2_passed:
             _classify_anomaly(ctx, config)
             passed.append(ctx)
@@ -95,6 +98,9 @@ def screen_l2_anomaly(
         logger.info(f"L2 分布 尾盘量占比: {p[0]}/{p[1]}/{p[2]}/{p[3]}")
         p = _pctls([abs(v) for v in late_changes], [50, 75, 90, 95])
         logger.info(f"L2 分布 尾盘涨幅|%|: {p[0]}/{p[1]}/{p[2]}/{p[3]}")
+    if active_buy_ratios:
+        p = _pctls(active_buy_ratios, [25, 50, 75, 90])
+        logger.info(f"L2 分布 active_buy_ratio(p25/p50/p75/p90): {p[0]}/{p[1]}/{p[2]}/{p[3]}")
     return passed
 
 
