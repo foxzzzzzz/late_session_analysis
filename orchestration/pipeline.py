@@ -662,7 +662,6 @@ class LateSessionPipeline:
                 self._log_low_count(contexts, "S2 L2(放宽)")
 
             self.funnel.stats['l2_count'] = len(contexts)
-            codes = [c.code for c in contexts]
 
             logger.info(
                 f"S2 L2通过: {len(contexts)} 只 "
@@ -670,7 +669,7 @@ class LateSessionPipeline:
             )
             self._log_low_count(contexts, "S2 L2异常")
 
-            if not codes:
+            if not contexts:
                 logger.info("S2 候选池清空，提前结束循环")
                 break
 
