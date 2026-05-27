@@ -80,7 +80,7 @@ def determine_regime(northbound, sh_index_20d_pct) -> str:
 
 | 参数 | 牛市 | 中性 | 熊市 | 理由 |
 |------|:---:|:---:|:---:|------|
-| `min_yang_ratio_4d` | 0.60 | 0.75 | 0.75 | 牛市放低阳线要求 |
+| `min_yang_ratio_4d` | 0.60 | 0.75 | 0.50 | 熊市阴多阳少，降到2/4避免过度过滤 |
 | `min_consecutive_close_rise` | 2 | 3 | 4 | 熊市需要更长的上涨惯性 |
 | `max_volatility` (ATR) | 9.0 | 8.5 | 7.0 | 牛市波动率容忍度更高 |
 
@@ -115,3 +115,11 @@ def determine_regime(northbound, sh_index_20d_pct) -> str:
 - [ ] 牛熊判定因子确认
 - [ ] 阈值差异值确认
 - [ ] 实施
+
+## 数据验证
+
+### 2026-05-27 (熊市特征)
+
+- 北向: 净买入 -40.4亿, 趋势分 10 (outflow)
+- K线 R1 淘汰分布: yang_ratio=531/710 (75%) 倒在 0.75 阈值
+- **结论**: 熊市 0.75 过高，降至 0.50 可从 54 只恢复到 ~500 只通过 K线
