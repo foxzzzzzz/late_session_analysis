@@ -1,7 +1,13 @@
 """北向资金情绪 — 同花顺 hsgtApi 上一交易日数据 + 本地自缓存
 
-注意: dayChart 端点返回最近完整交易日数据(非当日实时)，盘中调用也是昨日数据。
-数据源: data.hexin.cn/market/hsgtApi/method/dayChart/
+注意: 北向资金日度净买额数据自 2024-08 起全行业断供 (证监会对实时披露的监管调整)。
+- 东财全系: 净买额字段全部 NaN
+- hexin.cn dayChart: 始终返回同一份陈旧数据 (net=-40.38)
+- 同花顺: 401 反爬
+- 新浪: 无效服务名
+
+结论: 所有免费北向数据源均已失效, 本模块返回 available=False 以触发下游降级。
+数据源: data.hexin.cn/market/hsgtApi/method/dayChart/ (已失效)
 自缓存: ~/.tradingagents/cache/northbound_daily.csv (收盘后自动写入)
 """
 import logging
@@ -73,12 +79,20 @@ def _save_snapshot(date: str, hgt: float, sgt: float):
 def fetch_northbound_realtime() -> Optional[dict]:
     """拉取最近完整交易日北向资金分钟数据 (非当日实时，T+1滞后)
 
+    自 2024-08 起所有免费北向数据源均已失效, 此函数始终返回 None。
+    保留完整实现以备数据恢复后重新启用。
+
     Returns:
         dict with keys: today_net_yi (最近交易日累计净买入), hgt_yi, sgt_yi,
                         trend_score (近N日趋势), points (分钟数据点数),
                         recent_days (近N日每日净买入)
         失败返回 None
     """
+    # 北向资金日度数据自 2024-08 起全行业断供, 不再尝试拉取
+    logger.debug("北向资金: 数据源已断供 (2024-08起), 跳过拉取")
+    return None
+
+    # === 以下代码保留, 待数据恢复后启用 ===
     try:
         url = "https://data.hexin.cn/market/hsgtApi/method/dayChart/"
         r = requests.get(url, headers=HSGT_HEADERS, timeout=10)

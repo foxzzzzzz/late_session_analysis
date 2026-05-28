@@ -86,6 +86,19 @@ def merge_and_rank(
     logger.info(f"融合排序完成: strong_buy={strong_buy}, buy={buy}, "
                 f"total={len(contexts)}")
 
+    # 逐只明细: 规则分维度 + LLM决策 + 最终融合分
+    for ctx in contexts:
+        dim_scores = (
+            f"A尾盘={ctx.score_tail_strength:.0f} B形态={ctx.score_technical:.0f} "
+            f"C资金={ctx.score_capital:.0f} D均线={ctx.score_ma_system:.0f} "
+            f"E环境={ctx.score_market_env:.0f}"
+        )
+        logger.info(
+            f"  {ctx.code} {ctx.name} | 规则分={ctx.total_score:.0f}({dim_scores}) | "
+            f"LLM={ctx.llm_decision}({ctx.llm_confidence}) | "
+            f"融合={ctx.final_score:.0f} → {ctx.recommendation}"
+        )
+
     return contexts
 
 

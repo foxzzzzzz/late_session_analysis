@@ -29,7 +29,7 @@ class L3Config:
     sector_rank_top_pct: float = 30.0     # 板块排名前30%
     # 历史表现
     min_history_win_rate: float = 40.0    # 近5日收阳率(%)
-    max_volatility: float = 0.50          # 最大波动率(小数,如0.30=30%)
+    max_volatility: float = 0.60          # 最大波动率(小数,年化, 0.60=60%)
     max_consecutive_limits: int = 1       # 最多连续涨停天数
 
 

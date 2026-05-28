@@ -110,7 +110,6 @@ class SystemConfig:
     # === Pipeline 时间窗口 ===
     s2_window_end: str = "14:55"   # S2 尾盘异常扫描截止
     s3_window_end: str = "14:57"   # S3 技术面验证截止
-    s4_window_end: str = "14:58"   # S4 融合评分截止
 
     # === 报告 ===
     report_output_dir: str = "./reports"
@@ -150,7 +149,6 @@ class SystemConfig:
     s1_loop_interval: int = 180   # S1 K线扫描: 每3分钟
     s2_loop_interval: int = 60    # S2 尾盘异常: 每1分钟
     s3_loop_interval: int = 30    # S3 均线验证: 每30秒
-    s4_loop_interval: int = 10    # S4 融合评分: 每10秒
 
     # === 调度 ===
     schedule_enabled: bool = False
@@ -295,13 +293,11 @@ class SystemConfig:
         # Pipeline time windows
         self.s2_window_end = os.getenv("S2_WINDOW_END", self.s2_window_end)
         self.s3_window_end = os.getenv("S3_WINDOW_END", self.s3_window_end)
-        self.s4_window_end = os.getenv("S4_WINDOW_END", self.s4_window_end)
 
         # 时间循环
         self.s1_loop_interval = int(os.getenv("S1_LOOP_INTERVAL", str(self.s1_loop_interval)))
         self.s2_loop_interval = int(os.getenv("S2_LOOP_INTERVAL", str(self.s2_loop_interval)))
         self.s3_loop_interval = int(os.getenv("S3_LOOP_INTERVAL", str(self.s3_loop_interval)))
-        self.s4_loop_interval = int(os.getenv("S4_LOOP_INTERVAL", str(self.s4_loop_interval)))
 
     def need_llm(self) -> bool:
         """是否配置了LLM"""

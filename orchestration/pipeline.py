@@ -564,6 +564,7 @@ class LateSessionPipeline:
         codes, sector_map = sf.filter()
         self._s0_sector_map = sector_map
 
+        self.funnel.stats['s0_count'] = len(codes)
         self.tracker.stage_end("S0_板块预筛选", len(codes))
         logger.info(f"S0 完成: {len(codes)} 只候选股票")
         self._log_low_count(codes, "S0 板块预筛选")
@@ -591,6 +592,7 @@ class LateSessionPipeline:
         if self.kline_config:
             from screening.layer_kline import screen_kline
             contexts = screen_kline(contexts, self.kline_config, self._daily_cache)
+            self.funnel.stats['s1_kline_count'] = len(contexts)
             logger.info(f"S1 K线形态通过: {len(contexts)} 只")
             self._log_low_count(contexts, "S1 K线形态")
 
@@ -628,10 +630,14 @@ class LateSessionPipeline:
             # 一次性应用所有富化数据 (日线 + 5分钟尾盘指标 + 板块 + 题材)
             self._enrich_contexts(contexts)
 
-            # 资金流向 — 仅首轮拉取 (数据不随时间高频变化)
-            if iteration == 1:
+            # 资金流向 — 首轮 + 每5分钟刷新 (累积数据有增量)
+            if iteration == 1 or iteration % 5 == 0:
                 if self._flow_minute or self._flow_sina or self._flow_push2his:
+                    self._fund_flow_fetched = False
                     self._enrich_fund_flow(contexts)
+                    self.capital_data_date = (
+                        "today" if self._fund_flow_data else "none"
+                    )
 
             # L2 尾盘异常检测
             from screening.layer2_anomaly import screen_l2_anomaly, L2Config
@@ -680,7 +686,7 @@ class LateSessionPipeline:
         return contexts
 
     def _enrich_fund_flow(self, contexts: list[StockContext]):
-        """资金流向富化 — 双源并发 + 字段合并 (仅 S2 首轮调用)
+        """资金流向富化 — 双源并发 + 字段合并 (S2每5分钟, S3首轮调用)
 
         并发拉取:
           A. 分钟线 (push2 fflow/kline klt=1) → 实时 mainForce/super/large/retail
@@ -836,10 +842,27 @@ class LateSessionPipeline:
             iteration += 1
             logger.info(f"S3 第{iteration}轮扫描...")
 
-            # 刷新量价数据
+            # 刷新量价数据 (腾讯API: 价格/PE/市值)
             codes = [c.code for c in contexts]
             contexts = self._fetch_and_convert(codes)
-            self._enrich_contexts(contexts)  # Tencent 近似在此处执行
+
+            # 5分钟K线尾盘指标 — 每轮刷新 (14:55后新bar持续生成)
+            if self._kline_provider and codes:
+                min5_cache = self._kline_provider.load_5min_batch(codes, bars=48)
+                for code, df in min5_cache.items():
+                    if not df.empty:
+                        self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
+
+            # 资金流向 — 首轮刷新 (S2缓存已过~20分钟, 累积数据有增量)
+            if iteration == 1:
+                if self._flow_minute or self._flow_sina or self._flow_push2his:
+                    self._fund_flow_fetched = False
+                    self._enrich_fund_flow(contexts)
+                    self.capital_data_date = (
+                        "today" if self._fund_flow_data else "none"
+                    )
+
+            self._enrich_contexts(contexts)
 
             # 利空公告排查 (首轮, API调用有成本)
             if iteration == 1:
@@ -858,6 +881,7 @@ class LateSessionPipeline:
             self._log_low_count(l3_passed, "S3 L3技术")
 
             # 北向资金情绪 (首轮获取)
+            # 注意: 北向日度净买额自 2024-08 起全行业断供, 始终返回不可用
             if iteration == 1:
                 self.northbound_sentiment = {"available": False}
                 if self.config.enable_northbound:
@@ -869,6 +893,8 @@ class LateSessionPipeline:
                         f"昨日北向资金: 净买入 {self.northbound_sentiment['today_net_yi']}亿, "
                         f"趋势分 {self.northbound_sentiment['trend_score']:.0f}"
                     )
+                else:
+                    logger.info("北向资金: 数据不可用 (日度净买额自2024-08起行业断供)")
 
             # L4 评分
             from screening.layer4_scoring import score_l4, set_northbound_sentiment, set_concept_analyzer
@@ -890,57 +916,46 @@ class LateSessionPipeline:
     # ============================================================
 
     def _run_stage4(self, top30: list[StockContext]) -> list[StockContext]:
-        """S4: LLM分析 + 融合排序 (纯计算，无新数据拉取)"""
+        """S4: LLM分析 + 融合排序 (单次执行, 纯计算, 无新数据拉取)"""
         self.tracker.stage_start("S4_评分冲刺", len(top30))
 
-        loop_interval = self.config.s4_loop_interval
+        # LLM并行分析
+        llm_results = {}
+        if self.llm_runner:
+            self.tracker.llm_total = len(top30)
+            llm_results = self.llm_runner.analyze_batch(top30)
+            self.tracker.llm_success = sum(
+                1 for r in llm_results.values()
+                if not r.get('fallback', False)
+            )
+            self.tracker.llm_buy_signals = sum(
+                1 for r in llm_results.values()
+                if r.get('decision') == 'buy'
+            )
+            self._llm_results = llm_results
 
-        while True:
-            # LLM并行分析 (仅首轮，避免重复调用)
-            if self.llm_runner and not hasattr(self, '_llm_done'):
-                self.tracker.llm_total = len(top30)
-                llm_results = self.llm_runner.analyze_batch(top30)
-                self.tracker.llm_success = sum(
-                    1 for r in llm_results.values()
-                    if not r.get('fallback', False)
-                )
-                self.tracker.llm_buy_signals = sum(
-                    1 for r in llm_results.values()
-                    if r.get('decision') == 'buy'
-                )
-                self._llm_results = llm_results
-                self._llm_done = True
+        capital_ok = (self.capital_data_date == 'today')
+        llm_ok = (self.llm_runner is not None
+                  and any(not r.get('fallback', False) for r in llm_results.values()))
 
-            llm_results = getattr(self, '_llm_results', {})
-            capital_ok = (self.capital_data_date == 'today')
-            llm_ok = (self.llm_runner is not None
-                      and any(not r.get('fallback', False) for r in llm_results.values()))
+        rule_cfg = getattr(self.funnel.config, 'rule_scorer', None)
 
-            rule_cfg = getattr(self.funnel.config, 'rule_scorer', None)
-
-            if capital_ok and llm_ok:
-                # 完整数据: LLM融合, 标准阈值
-                top30 = merge_and_rank(top30, llm_results, rule_weight=0.7,
-                    strong_buy_threshold=80, buy_threshold=72, watch_threshold=55,
-                    rule_scorer_cfg=rule_cfg)
-            elif capital_ok and not llm_ok:
-                # 缺LLM: 纯规则, 阈值略降
-                top30 = merge_and_rank(top30, llm_results, rule_weight=1.0,
-                    strong_buy_threshold=75, buy_threshold=65, watch_threshold=50,
-                    rule_scorer_cfg=rule_cfg)
-            elif not capital_ok and llm_ok:
-                # 缺资金流: LLM融合, 阈值下调补偿C维度
-                top30 = merge_and_rank(top30, llm_results, rule_weight=0.7,
-                    strong_buy_threshold=72, buy_threshold=62, watch_threshold=48,
-                    rule_scorer_cfg=rule_cfg)
-            else:
-                # 资金流+LLM都缺: 纯规则, 最大降幅
-                top30 = merge_and_rank(top30, llm_results, rule_weight=1.0,
-                    strong_buy_threshold=65, buy_threshold=55, watch_threshold=40,
-                    rule_scorer_cfg=rule_cfg)
-
-            if not self._sleep_or_break(self.config.s4_window_end, loop_interval):
-                break
+        if capital_ok and llm_ok:
+            top30 = merge_and_rank(top30, llm_results, rule_weight=0.7,
+                strong_buy_threshold=80, buy_threshold=72, watch_threshold=55,
+                rule_scorer_cfg=rule_cfg)
+        elif capital_ok and not llm_ok:
+            top30 = merge_and_rank(top30, llm_results, rule_weight=1.0,
+                strong_buy_threshold=75, buy_threshold=65, watch_threshold=50,
+                rule_scorer_cfg=rule_cfg)
+        elif not capital_ok and llm_ok:
+            top30 = merge_and_rank(top30, llm_results, rule_weight=0.7,
+                strong_buy_threshold=72, buy_threshold=62, watch_threshold=48,
+                rule_scorer_cfg=rule_cfg)
+        else:
+            top30 = merge_and_rank(top30, llm_results, rule_weight=1.0,
+                strong_buy_threshold=65, buy_threshold=55, watch_threshold=40,
+                rule_scorer_cfg=rule_cfg)
 
         self.tracker.stage_end("S4_评分冲刺", len(top30))
         return top30
@@ -967,7 +982,7 @@ class LateSessionPipeline:
             ]
             for code, name in index_targets:
                 try:
-                    df = self._kline_provider._client.bars(symbol=code, category=4, offset=1)
+                    df = self._kline_provider._client.index_bars(symbol=code, frequency=9, offset=1)
                     if df is not None and not df.empty:
                         row = df.iloc[-1]
                         close = float(row.get("close", 0))
@@ -1040,15 +1055,23 @@ class LateSessionPipeline:
         llm_fallback_count = sum(1 for c in top30 if c.llm_fallback)
         nb_data = self.northbound_sentiment or {}
         concept_dist = self.concept_analyzer.get_concept_distribution() if self.concept_analyzer.is_analyzed else {}
+        s0_count = self.funnel.stats.get('s0_count', 0)
+        s1_kline = self.funnel.stats.get('s1_kline_count', 0)
+        l1_count = self.funnel.stats.get('l1_count', 0)
+        l2_count = self.funnel.stats.get('l2_count', 0)
+        l3_count = self.funnel.stats.get('l3_count', 0)
         stats = {
             'initial': 5000,
-            'l1': self.funnel.stats.get('l1_count', 0),
-            'l2': self.funnel.stats.get('l2_count', 0),
-            'l3': self.funnel.stats.get('l3_count', 0),
+            's0': s0_count,
+            's1_l1': l1_count,
+            's1_kline': s1_kline,
+            'l2': l2_count,
+            'l3': l3_count,
             'l4': self.funnel.stats.get('l4_count', len(top30)),
-            'l1_ratio': self.funnel.stats.get('l1_count', 0) / 5000 * 100,
-            'l2_ratio': self.funnel.stats.get('l2_count', 0) / max(self.funnel.stats.get('l1_count', 1), 1) * 100 if self.funnel.stats.get('l1_count') else 0,
-            'l3_ratio': self.funnel.stats.get('l3_count', 0) / max(self.funnel.stats.get('l2_count', 1), 1) * 100 if self.funnel.stats.get('l2_count') else 0,
+            's0_ratio': s0_count / 5000 * 100,
+            's1_ratio': s1_kline / max(s0_count, 1) * 100 if s0_count else 0,
+            'l2_ratio': l2_count / max(s1_kline, 1) * 100 if s1_kline else 0,
+            'l3_ratio': l3_count / max(l2_count, 1) * 100 if l2_count else 0,
             'elapsed': self.tracker.pipeline_end - self.tracker.pipeline_start,
             'llm_api_success': self.tracker.llm_success,
             'llm_total': self.tracker.llm_total,

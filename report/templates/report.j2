@@ -6,7 +6,7 @@
 
 ---
 
-{% if stats.capital_data_date == 'yesterday' %}
+{% if stats.capital_data_date == 'yesterday' -%}
 ## ⚠️ 数据提示：资金流向使用昨日数据
 
 > **资金流向数据来自昨日** — 当日实时数据源(东方财富 push2his)不可达，
@@ -14,7 +14,7 @@
 
 ---
 
-{% elif not stats.capital_data_available and not stats.llm_disabled %}
+{% elif not stats.capital_data_available and not stats.llm_disabled -%}
 ## ⚠️ 重要提示：资金流向数据不可用
 
 > **资金流向数据完全缺失** — 当日实时及昨日降级数据源均不可达。
@@ -23,72 +23,71 @@
 
 ---
 
-{% endif %}
-{% if stats.llm_fallback_count > 0 or stats.llm_disabled %}
+{% endif -%}
+{% if stats.llm_fallback_count > 0 or stats.llm_disabled -%}
 ## ⚠️ LLM分析提示
 
-{% if stats.llm_disabled %}
+{% if stats.llm_disabled -%}
 > **LLM功能已禁用** — 本报告所有推荐**仅基于规则评分引擎**生成，
 > 未经过AI模型综合研判，推荐阈值已自动下调。
-{% else %}
+{% else -%}
 > **{{ stats.llm_api_success }}/{{ stats.llm_total }} 只API调用成功**
 > ({{ stats.llm_buy_signals }} 只LLM建议买入)
 > {% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只超时降级为规则评分，阈值已相应调整{% endif %}。
 > 标记为 `[规则]` 的标的**未经过AI模型验证**，信号可靠性降低。
-{% endif %}
+{% endif -%}
 
 ---
 
-{% endif %}
-
-{% if market_overview["indices"] or market_overview["breadth"]["up"] > 0 %}
+{% endif -%}
+{% if market_overview["indices"] or market_overview["breadth"]["up"] > 0 -%}
 ## 📊 大盘概况
 
-{% if market_overview["indices"] %}
+{% if market_overview["indices"] -%}
 ### 主要指数
 
 | 指数 | 当前点位 | 涨跌幅 | 涨跌额 |
 |------|---------|--------|--------|
-{% for idx in market_overview["indices"] %}
+{% for idx in market_overview["indices"] -%}
 | {{ idx["name"] }} | {{ "%.2f"|format(idx["close"]) }} | {{ "%+.2f%%"|format(idx["change_pct"]) }} | {{ "%+.2f"|format(idx["change_amt"]) }} |
-{% endfor %}
+{% endfor -%}
 
-{% endif %}
-{% if market_overview["breadth"]["up"] > 0 %}
+{% endif -%}
+{% if market_overview["breadth"]["up"] > 0 -%}
 ### 市场宽度
 
 上涨 **{{ market_overview["breadth"]["up"] }}** 家 | 下跌 **{{ market_overview["breadth"]["down"] }}** 家 | 平盘 **{{ market_overview["breadth"]["flat"] }}** 家
 涨跌比 **{{ market_overview["breadth"]["ratio"] }} : 1** ({{ market_overview["breadth"]["bias"] }})
 
-{% endif %}
-{% if market_overview["hot_sectors"] %}
+{% endif -%}
+{% if market_overview["hot_sectors"] -%}
 ### 热点板块 Top5
 
 | 排名 | 板块 | 涨幅 |
 |------|------|------|
-{% for sector, pct in market_overview["hot_sectors"] %}
+{% for sector, pct in market_overview["hot_sectors"] -%}
 | {{ loop.index }} | {{ sector }} | {{ "%+.2f%%"|format(pct) }} |
-{% endfor %}
+{% endfor -%}
 
-{% endif %}
-{% if stats.concept_total > 0 %}
+{% endif -%}
+{% if stats.concept_total > 0 -%}
 ### 热门题材
 
 {{ stats.concept_total }} 个活跃题材 | {{ stats.concept_occurrences }} 次标签匹配
 - Top5: {% for c in stats.concept_top5 %}{{ c[0] }}({{ c[1] }}){% if not loop.last %}, {% endif %}{% endfor %}
 
-{% endif %}
+{% endif -%}
 ---
 
-{% endif %}
+{% endif -%}
 ## 📈 最终推荐
 
-{% for stock in strong_buy %}
+{% for stock in strong_buy -%}
 ### 🔥 {{ stock.code }} {{ stock.name }} — **强烈买入** ({{ "%.0f"|format(stock.final_score) }}分){% if stock.llm_fallback %} ⚠️[规则]{% endif %}
 
-{% if stock.llm_fallback %}
+{% if stock.llm_fallback -%}
 > **注意：此标的LLM分析未生效，以下结论为规则评分引擎生成，请谨慎参考。**
-{% endif %}
+{% endif -%}
 
 | 指标 | 数值 | 指标 | 数值 |
 |------|------|------|------|
@@ -98,52 +97,49 @@
 | 大单流入 | {{ "%.0f"|format(stock.big_order_net/1e4) }}万 | 评分 | A{{"%.0f"|format(stock.score_tail_strength)}} B{{"%.0f"|format(stock.score_technical)}} C{{"%.0f"|format(stock.score_capital)}} D{{"%.0f"|format(stock.score_ma_system)}} E{{"%.0f"|format(stock.score_market_env)}} → {{"%.0f"|format(stock.total_score)}}/100 |
 | LLM决策 | {{ stock.llm_decision }} ({{ stock.llm_confidence }}) | LLM理由 | {{ stock.llm_reason }} |
 
-{% endfor %}
-
-{% if buy_stocks %}
+{% endfor -%}
+{% if buy_stocks -%}
 ### ✅ 建议买入
 
 | 排名 | 代码 | 名称 | 评分 | 尾盘涨幅 | LLM置信度 | 异动类型 | 备注 |
 |------|------|------|------|----------|-----------|----------|------|
-{% for s in buy_stocks %}
+{% for s in buy_stocks -%}
 | {{ s.final_rank }} | {{ s.code }} | {{ s.name }} | {{ "%.0f"|format(s.final_score) }} | {{ "%+.2f%%"|format(s.late_price_change) }} | {{ s.llm_confidence }}{% if s.llm_fallback %}[规则]{% endif %} | {{ s.anomaly_type }} | {% if s.llm_fallback %}⚠{% else %}✓{% endif %} |
-{% endfor %}
-{% endif %}
-
-{% if watch_stocks %}
+{% endfor -%}
+{% endif -%}
+{% if watch_stocks -%}
 ### 👀 观察池
 
 | 排名 | 代码 | 名称 | 评分 | 尾盘涨幅 | 异动类型 | 备注 |
 |------|------|------|------|----------|----------|------|
-{% for s in watch_stocks %}
+{% for s in watch_stocks -%}
 | {{ s.final_rank }} | {{ s.code }} | {{ s.name }} | {{ "%.0f"|format(s.final_score) }} | {{ "%+.2f%%"|format(s.late_price_change) }} | {{ s.anomaly_type }} | {% if s.llm_fallback %}⚠{% else %}—{% endif %} |
-{% endfor %}
-{% endif %}
-
+{% endfor -%}
+{% endif -%}
 ---
 
 ## 📊 运行统计
 
 | 阶段 | 输入 | 输出 | 通过率 |
 |------|------|------|--------|
-| L1 基础准入 | {{ stats.initial }} | {{ stats.l1 }} | {{ "%.1f%%"|format(stats.l1_ratio) }} |
-| L2 尾盘异动 | {{ stats.l1 }} | {{ stats.l2 }} | {{ "%.1f%%"|format(stats.l2_ratio) }} |
-| L3 技术验证 | {{ stats.l2 }} | {{ stats.l3 }} | {{ "%.1f%%"|format(stats.l3_ratio) }} |
-| L4 量化评分 | {{ stats.l3 }} | {{ stats.l4 }} | — |
+| S0 板块预筛选 | {{ stats.initial }} | {{ stats.s0 }} | {{ "%.1f%%"|format(stats.s0_ratio) }} |
+| S1 L1+形态 | {{ stats.s0 }} | {{ stats.s1_kline }} | {{ "%.1f%%"|format(stats.s1_ratio) }} |
+| S2 尾盘异动 | {{ stats.s1_kline }} | {{ stats.l2 }} | {{ "%.1f%%"|format(stats.l2_ratio) }} |
+| S3 技术验证 | {{ stats.l2 }} | {{ stats.l3 }} | {{ "%.1f%%"|format(stats.l3_ratio) }} |
+| S4 量化评分 | {{ stats.l3 }} | {{ stats.l4 }} | — |
 
 **总耗时**: {{ "%.1f"|format(stats.elapsed) }}秒
 
-{% if stats.llm_disabled %}
+{% if stats.llm_disabled -%}
 **LLM分析**: 未启用 (纯规则评分模式)
-{% else %}
+{% else -%}
 **LLM分析**: {{ stats.llm_api_success }}/{{ stats.llm_total }} API调用成功，{{ stats.llm_buy_signals }} 只建议买入{% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只超时降级{% endif %}{% if not stats.capital_data_available %} | 资金面权重已调整{% endif %}
-{% endif %}
+{% endif -%}
 
 **资金流向**: {% if stats.capital_data_date == 'today' %}今日实时数据{% elif stats.capital_data_date == 'yesterday' %}⚠️ 昨日降级数据{% else %}不可用{% endif %}
 
-{% if stats.northbound_available %}
+{% if stats.northbound_available -%}
 **昨日北向资金**: 净买入 {{ "%.1f"|format(stats.northbound_today_net) }}亿 | 趋势分 {{ "%.0f"|format(stats.northbound_trend) }} | 情绪: {{ stats.northbound_label }}
-{% else %}
+{% else -%}
 **昨日北向资金**: 数据不可用
-{% endif %}
-
+{% endif -%}

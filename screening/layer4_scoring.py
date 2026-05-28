@@ -159,16 +159,18 @@ def score_l4(
 
     contexts.sort(key=lambda c: c.total_score, reverse=True)
 
-    strong_buy = sum(1 for c in contexts if c.recommendation == 'strong_buy')
-    buy = sum(1 for c in contexts if c.recommendation == 'buy')
-    watch = sum(1 for c in contexts if c.recommendation == 'watch')
-
-    logger.info(
-        f"L4 评分 [{capital_data_date}资金流]: {len(contexts)} 只, "
-        f"strong_buy(>{config.high_attention_threshold}): {strong_buy}, "
-        f"buy({config.buy_threshold}-{config.high_attention_threshold}): {buy}, "
-        f"watch({config.medium_attention_threshold}-{config.buy_threshold}): {watch}"
-    )
+    # 评分分布 (实际推荐阈值由 merge_and_rank 根据数据可用性动态决定)
+    scores = [c.total_score for c in contexts]
+    n = len(scores)
+    if n > 0:
+        p50 = scores[n // 2] if n >= 2 else scores[0]
+        p75 = scores[n * 3 // 4] if n >= 4 else scores[-1]
+        p90 = scores[n * 9 // 10] if n >= 10 else scores[-1]
+        logger.info(
+            f"L4 规则评分 [{capital_data_date}资金流]: {n} 只, "
+            f"max={max(scores):.0f}, p90={p90:.0f}, p75={p75:.0f}, p50={p50:.0f}, "
+            f"min={min(scores):.0f}"
+        )
 
     return contexts
 
