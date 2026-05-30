@@ -39,6 +39,7 @@ class SystemConfig:
     l2_recovery_drop: float = 3.0
     l2_recovery_rise: float = 1.5
     l2_active_buy_pct: float = 55.0
+    l2_late_active_buy_ratio_min: float = 45.0  # 尾盘实时active_buy_ratio最低(%)
     l2_require_capital: bool = True    # 资金流向是否作为硬门槛 (false=仅评分使用)
     l2_min_pass: int = 10              # L2 最低通过数，不足时自动放宽资金条件
     l2_big_order_net_min: float = 0    # 大单净流入下限(万元)
@@ -136,7 +137,7 @@ class SystemConfig:
     kline_max_consecutive_up: int = 5      # 最多连涨天数
     kline_max_up_in_9days: int = 6         # 近9天最多涨几天
     kline_max_single_day_pct: float = 6.5  # 单日涨幅上限(%)
-    kline_min_yang_ratio_4d: float = 0.75  # 近4天阳线占比最低 (3/4)
+    kline_min_yang_ratio_4d: float = 0.50  # 近4天阳线占比最低 (2/4, 熊市放宽)
     kline_min_consecutive_close_rise: int = 3  # 至少连续N天收盘上涨
     kline_min_close_rise_pct: float = 0.3  # 连续上涨每天最低涨幅(%)
     kline_max_atr_multiple: float = 2.0    # 单日涨幅 <= N倍ATR
@@ -341,6 +342,7 @@ class SystemConfig:
                 recovery_drop_min=self.l2_recovery_drop,
                 recovery_rise_min=self.l2_recovery_rise,
                 active_buy_ratio_min=self.l2_active_buy_pct,
+                late_active_buy_ratio_min=self.l2_late_active_buy_ratio_min,
                 require_capital=self.l2_require_capital,
                 big_order_net_min=self.l2_big_order_net_min,
                 big_order_ratio_mult=self.l2_big_order_ratio_mult,

@@ -68,6 +68,7 @@ class L4Config:
     flow_net_positive_score: float = 2.0
     flow_ratio_score: float = 5.0
     active_buy_tiers: list = None
+    late_active_buy_tiers: list = None    # 尾盘实时active_buy_ratio阶梯分
     northbound_tiers: list = None
 
     # D维度: 均线系统
@@ -104,6 +105,8 @@ class L4Config:
             self.flow_net_tiers = [[1000, 10], [500, 7], [100, 4]]
         if self.active_buy_tiers is None:
             self.active_buy_tiers = [[60, 5], [55, 3]]
+        if self.late_active_buy_tiers is None:
+            self.late_active_buy_tiers = [[70, 8], [60, 5], [50, 3]]
         if self.northbound_tiers is None:
             self.northbound_tiers = [[70, 3], [55, 1]]
         if self.ma_alignment_scores is None:
@@ -276,11 +279,13 @@ def _score_capital_flow(ctx, max_c: int, cfg) -> float:
     if not matched and ctx.big_order_net > 0:
         score += cfg.flow_net_positive_score
 
-    # 机构动向: 大单占比 + 主动买入占比
+    # 机构动向: 大单占比 + 主动买入占比 + 尾盘实时资金
     inst = 0.0
     if ctx.big_order_ratio >= 0.2:
         inst += cfg.flow_ratio_score
     inst += _tier_score(ctx.active_buy_ratio, cfg.active_buy_tiers)
+    if ctx.late_active_buy_ratio > 0:
+        inst += _tier_score(ctx.late_active_buy_ratio, cfg.late_active_buy_tiers)
 
     # 北向资金加成
     if _northbound_sentiment and _northbound_sentiment.get("available"):

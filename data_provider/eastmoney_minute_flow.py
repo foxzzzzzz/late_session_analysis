@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 _PUSH2_FFLOW_API = (
     "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
-    "?secid={secid}&klt=1&lmt=1"
+    "?secid={secid}&klt=1&lmt=5"
     "&fields1=f1,f2,f3,f7"
     "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
 )
@@ -43,6 +43,8 @@ class EastmoneyMinuteFlowFetcher:
     def __init__(self, timeout: float = 8.0, max_workers: int = 4):
         self.timeout = timeout
         self.max_workers = max_workers
+        self._last_success: dict[str, dict] = {}
+        self._stagger_range = (0.3, 0.6)
 
     def enrich_batch(self, codes: list[str]) -> dict[str, dict]:
         """批量获取分钟级资金流向
@@ -78,6 +80,8 @@ class EastmoneyMinuteFlowFetcher:
 
     def _fetch_one(self, code: str) -> Optional[dict]:
         """获取单只股票分钟级资金流"""
+        time.sleep(random.uniform(*self._stagger_range))
+
         secid = _to_secid(code)
         url = _PUSH2_FFLOW_API.format(secid=secid)
 
@@ -103,7 +107,7 @@ class EastmoneyMinuteFlowFetcher:
             if len(parts) < 6:
                 return None
 
-            return {
+            result = {
                 "mainForce": _sf(parts[1]) / 10000.0,
                 "retail": _sf(parts[2]) / 10000.0,
                 "mid": _sf(parts[3]) / 10000.0,
@@ -111,6 +115,14 @@ class EastmoneyMinuteFlowFetcher:
                 "super": _sf(parts[5]) / 10000.0,
                 "data_date": datetime.now().strftime("%Y-%m-%d"),
             }
+            self._last_success[code] = result
+            return result
+
+        # 全部重试失败 → 返回上次成功缓存
+        cached = self._last_success.get(code)
+        if cached:
+            logger.debug(f"东财分钟资金流 [{code}] 刷新失败，使用缓存 (日期={cached.get('data_date')})")
+            return cached
 
         logger.debug(f"东财分钟资金流 [{code}] 不可达: {last_error}")
         return None

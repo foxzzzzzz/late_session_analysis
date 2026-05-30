@@ -100,6 +100,9 @@ class LateSessionPipeline:
         self._fund_flow_fetched: bool = False
         self._fund_flow_data: dict[str, dict] = {}  # S2获取的原始数据，供S3回填
 
+        # Sina双时间点差分基线 (尾盘实时 active_buy_ratio)
+        self._sina_baseline: dict[str, dict] = {}  # {code: {r0_in, r0_out}} 首轮快照
+
         # 初始化LLM (如果配置了)
         self.llm_client: Optional[LLMClient] = None
         self.llm_runner: Optional[ParallelLLMRunner] = None
@@ -762,6 +765,26 @@ class LateSessionPipeline:
                 "data_date": sd.get("data_date") or hd.get("data_date") or md.get("data_date", ""),
             }
 
+        # Sina双时间点差分: 首轮保存基线, 后续轮次计算尾盘实时 active_buy_ratio
+        is_first_sina = not self._sina_baseline and sina_data
+        if is_first_sina:
+            for code, sd in sina_data.items():
+                r0_in = sd.get("r0_in", 0)
+                r0_out = sd.get("r0_out", 0)
+                if r0_in > 0 or r0_out > 0:
+                    self._sina_baseline[code] = {"r0_in": r0_in, "r0_out": r0_out}
+            logger.info(
+                f"Sina基线: 已保存 {len(self._sina_baseline)} 只股票的 r0_in/r0_out 快照"
+            )
+        elif self._sina_baseline and sina_data:
+            # 后续轮次: 新出现的股票也保存基线
+            for code, sd in sina_data.items():
+                if code not in self._sina_baseline:
+                    r0_in = sd.get("r0_in", 0)
+                    r0_out = sd.get("r0_out", 0)
+                    if r0_in > 0 or r0_out > 0:
+                        self._sina_baseline[code] = {"r0_in": r0_in, "r0_out": r0_out}
+
         today_count = 0
         today_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -801,6 +824,17 @@ class LateSessionPipeline:
             ab_source = sd or hd
             ctx.active_buy_ratio = ab_source.get("active_buy_ratio", 50.0)
 
+            # 尾盘实时 active_buy_ratio: Sina双时间点差分
+            if sd and ctx.code in self._sina_baseline:
+                bl = self._sina_baseline[ctx.code]
+                r0_in_now = sd.get("r0_in", 0)
+                r0_out_now = sd.get("r0_out", 0)
+                delta_in = r0_in_now - bl["r0_in"]
+                delta_out = r0_out_now - bl["r0_out"]
+                delta_total = delta_in + delta_out
+                if delta_total > 0:
+                    ctx.late_active_buy_ratio = delta_in / delta_total * 100
+
             # 日期验证: 分钟线或新浪有当日日期即算有效
             dates = [d.get("data_date", "") for d in (md, sd, hd) if d]
             if any(d == today_str for d in dates):
@@ -819,6 +853,20 @@ class LateSessionPipeline:
             f"资金流向: 富化 {today_count}/{len(enrich_candidates)} 只 "
             f"({date_label}, 来源: {'+'.join(sources) if sources else 'none'})"
         )
+        # 尾盘 active_buy_ratio 分布 (Sina差分, 有基线后才有效)
+        late_ab_vals = sorted(
+            [c.late_active_buy_ratio for c in enrich_candidates
+             if c.late_active_buy_ratio > 0]
+        )
+        if late_ab_vals:
+            n = len(late_ab_vals)
+            p25 = late_ab_vals[n // 4]
+            p50 = late_ab_vals[n // 2]
+            p75 = late_ab_vals[n * 3 // 4]
+            logger.info(
+                f"尾盘 active_buy_ratio(Sina差分) 分布: n={n} "
+                f"p25={p25:.1f} p50={p50:.1f} p75={p75:.1f}"
+            )
         self._fund_flow_fetched = True
 
     # ============================================================

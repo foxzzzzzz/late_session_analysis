@@ -124,6 +124,8 @@ class SinaFundFlowFetcher:
                 "large": 0.0,   # 新浪不拆分超大单/大单
                 "super": 0.0,
                 "active_buy_ratio": active_buy,
+                "r0_in": r0_in,
+                "r0_out": r0_out,
                 "netamount": _sf(raw.get("netamount")) / 10000.0,  # 净流入总额(万元)
                 "data_date": datetime.now().strftime("%Y-%m-%d"),
             }

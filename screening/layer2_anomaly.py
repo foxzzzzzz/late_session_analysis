@@ -27,7 +27,8 @@ class L2Config:
     # 资金流向
     big_order_net_min: float = 0          # 大单净流入下限
     big_order_ratio_mult: float = 1.3     # 尾盘大单占比 / 全天平均
-    active_buy_ratio_min: float = 55.0    # 主动买入占比(%)
+    active_buy_ratio_min: float = 55.0    # 主动买入占比(%) — 全天累计
+    late_active_buy_ratio_min: float = 45.0  # 尾盘实时active_buy_ratio(%) — Sina差分
     # 盘口
     cancel_rate_max: float = 30.0        # 最大撤单率(%)
     # 开关
@@ -101,6 +102,14 @@ def screen_l2_anomaly(
     if active_buy_ratios:
         p = _pctls(active_buy_ratios, [25, 50, 75, 90])
         logger.info(f"L2 分布 active_buy_ratio(p25/p50/p75/p90): {p[0]}/{p[1]}/{p[2]}/{p[3]}")
+    # 尾盘实时 active_buy_ratio (Sina差分, 仅首轮后有数据)
+    late_ab = sorted([c.late_active_buy_ratio for c in contexts if c.late_active_buy_ratio > 0])
+    if late_ab:
+        n = len(late_ab)
+        logger.info(
+            f"L2 分布 late_active_buy_ratio(Sina差分): n={n} "
+            f"p25={late_ab[n//4]:.1f} p50={late_ab[n//2]:.1f} p75={late_ab[n*3//4]:.1f}"
+        )
     return passed
 
 
@@ -155,7 +164,11 @@ def _check_l2(ctx, cfg: L2Config, has_depth: bool, has_capital: bool) -> tuple[b
         if ctx.daily_avg_big_order_ratio > 0:
             if ctx.big_order_ratio < ctx.daily_avg_big_order_ratio * cfg.big_order_ratio_mult:
                 capital_ok = False
-        if ctx.active_buy_ratio < cfg.active_buy_ratio_min:
+        # active_buy_ratio: 尾盘实时数据可用时用它 (更相关), 否则用全天累计
+        ab_ok = ctx.active_buy_ratio >= cfg.active_buy_ratio_min
+        if ctx.late_active_buy_ratio > 0:
+            ab_ok = ab_ok or ctx.late_active_buy_ratio >= cfg.late_active_buy_ratio_min
+        if not ab_ok:
             capital_ok = False
         if not capital_ok:
             failures.append("capital_fail")

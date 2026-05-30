@@ -45,7 +45,7 @@ class KlineConfig:
     max_atr_pct: float = 8.5           # ATR/Close 最高(%) — 过滤过度投机
     max_consecutive_up: int = 5         # 最多连涨天数
     max_up_in_9days: int = 6           # 近9天最多涨几天
-    min_yang_ratio_4d: float = 0.75   # 近4天阳线占比最低 (3/4)
+    min_yang_ratio_4d: float = 0.50   # 近4天阳线占比最低 (2/4, 熊市放宽)
     min_consecutive_close_rise: int = 3  # 至少连续N天收盘上涨
     min_close_rise_pct: float = 0.3      # 连续上涨每天最低涨幅(%)
     max_single_day_pct: float = 6.5    # 单日涨幅上限(%)

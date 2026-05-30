@@ -25,7 +25,7 @@ python main.py --test
 # 5. 实时模式 (仅交易日 14:25-15:05 有效)
 python main.py
 
-# 6. 定时调度 (14:25 自动启动)
+# 6. 定时调度 (14:35 自动启动)
 python main.py --schedule
 
 # 7. 仅数据拉取，不分析

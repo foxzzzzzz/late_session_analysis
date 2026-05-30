@@ -49,7 +49,8 @@ class StockContext:
     big_order_net: float = 0.0          # 大单净流入
     big_order_ratio: float = 0.0        # 大单占比
     daily_avg_big_order_ratio: float = 0.0
-    active_buy_ratio: float = 0.0       # 主动买入占比
+    active_buy_ratio: float = 0.0       # 主动买入占比(全天累计)
+    late_active_buy_ratio: float = 0.0  # 尾盘主动买入占比(Sina差分)
     bid_vol: float = 0.0                # 买盘挂单总量
     ask_vol: float = 0.0                # 卖盘挂单总量
     cancel_rate: float = 0.0            # 尾盘撤单率
