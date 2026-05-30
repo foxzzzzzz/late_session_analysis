@@ -1,12 +1,11 @@
-"""7阶段主控流水线
+"""5阶段主控流水线
 
 时间线:
   S0 14:25-14:30 板块预筛选 (1次)
   S1 14:30-14:50 初始扫描 (每3分钟,候选池,L1+K线)
   S2 14:50-14:55 加速监控 (每1分钟,候选池,L2+资金流向)
-  S3 14:55-14:57 最后验证 (每30秒,精选池,L3+均线)
-  S4 14:57-14:58 决策冲刺 (每10秒,Top30,L4评分)
-  S5-S7 后续实现
+  S3 14:55       L3静态验证 (单次, 均线/波动率/利空/解禁)
+  S4 14:55-14:58 L4多轮评分 (每10秒刷新分时, L4评分+LLM融合)
 """
 import time
 import logging
@@ -236,13 +235,15 @@ class LateSessionPipeline:
             if 2 in stages:
                 contexts = self._run_stage2(contexts)
 
-            # === S3: 均线验证 ===
+            # === S3: 均线静态验证 (单次) ===
             if 3 in stages:
-                contexts, top30 = self._run_stage3(contexts)
+                l3_passed = self._run_stage3(contexts)
+            else:
+                l3_passed = list(contexts)
 
-            # === S4: 融合评分 + LLM ===
+            # === S4: L4多轮评分 + LLM (每10秒循环, 14:55-14:58) ===
             if 4 in stages:
-                top30 = self._run_stage4(top30)
+                top30 = self._run_stage4(l3_passed)
 
             self.tracker.finish()
 
@@ -870,29 +871,91 @@ class LateSessionPipeline:
         self._fund_flow_fetched = True
 
     # ============================================================
-    # S3: 均线验证 (每30秒循环, 14:55-14:57)
+    # S3: 均线静态验证 (单次执行, 14:55)
     # ============================================================
 
-    def _run_stage3(self, contexts: list[StockContext]) -> tuple:
-        """S3: 均线验证 + 利空排查 + 龙头效应 + 北向情绪 + L4评分"""
+    def _run_stage3(self, contexts: list[StockContext]) -> list[StockContext]:
+        """S3: L3静态指标验证 — 单次执行，价格敏感检查已移至L4"""
         self.tracker.stage_start("S3_均线验证", len(contexts))
 
-        loop_interval = self.config.s3_loop_interval
+        # 刷新量价数据 + 5分钟K线
+        codes = [c.code for c in contexts]
+        contexts = self._fetch_and_convert(codes)
+        if self._kline_provider and codes:
+            min5_cache = self._kline_provider.load_5min_batch(codes, bars=48)
+            for code, df in min5_cache.items():
+                if not df.empty:
+                    self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
+
+        # 资金流向刷新 (S2缓存已过~20分钟, 累积数据有增量)
+        if self._flow_minute or self._flow_sina or self._flow_push2his:
+            self._fund_flow_fetched = False
+            self._enrich_fund_flow(contexts)
+            self.capital_data_date = "today" if self._fund_flow_data else "none"
+
+        self._enrich_contexts(contexts)
+
+        # 利空公告排查
+        self._enrich_bad_news(contexts)
+
+        # 板块内排名 → 龙头效应增强
+        sector_codes: dict[str, list[str]] = {}
+        for code, sec in self._s0_sector_map.items():
+            sector_codes.setdefault(sec, []).append(code)
+        self._enrich_leader_strength(contexts, sector_codes)
+
+        # L3 静态指标验证 (volume_shrink/volatility/vol_ratio/解禁/利空等)
+        from screening.layer3_technical import screen_l3_technical
+        l3_passed = screen_l3_technical(
+            contexts, self.preloader, self.funnel.config.l3
+        )
+        self.funnel.stats['l3_count'] = len(l3_passed)
+        logger.info(f"S3 L3静态验证: {len(contexts)} → {len(l3_passed)} "
+                    f"({len(l3_passed) / max(len(contexts), 1) * 100:.1f}%)")
+        self._log_low_count(l3_passed, "S3 L3静态")
+
+        # 北向资金情绪 — 数据自2024-08起全行业断供
+        self.northbound_sentiment = {"available": False}
+        if self.config.enable_northbound:
+            nb = get_northbound_sentiment()
+            if nb:
+                self.northbound_sentiment = nb
+        if self.northbound_sentiment.get("available"):
+            logger.info(
+                f"昨日北向资金: 净买入 {self.northbound_sentiment['today_net_yi']}亿, "
+                f"趋势分 {self.northbound_sentiment['trend_score']:.0f}"
+            )
+        else:
+            logger.info("北向资金: 数据不可用 (日度净买额自2024-08起行业断供)")
+
+        self.tracker.stage_end("S3_均线验证", len(l3_passed))
+        return l3_passed
+
+    # ============================================================
+    # S4: L4多轮评分 + LLM (每10秒循环刷新分时指标, 14:55-14:58)
+    # ============================================================
+
+    def _run_stage4(self, l3_passed: list[StockContext]) -> list[StockContext]:
+        """S4: L4多轮评分 (刷新分时价格+5min指标) + 末轮LLM分析 + 融合排序"""
+        self.tracker.stage_start("S4_评分冲刺", len(l3_passed))
+
+        loop_interval = 10  # 每10秒刷新L4评分
         iteration = 0
         scored: list[StockContext] = []
 
-        # S0板块→成分股反向映射 (用于板块内排名)
         sector_codes: dict[str, list[str]] = {}
         for code, sec in self._s0_sector_map.items():
             sector_codes.setdefault(sec, []).append(code)
 
+        from screening.layer4_scoring import score_l4, set_northbound_sentiment, set_concept_analyzer
+
         while True:
             iteration += 1
-            logger.info(f"S3 第{iteration}轮扫描...")
+            logger.info(f"S4 第{iteration}轮评分...")
 
-            # 刷新量价数据 (腾讯API: 价格/PE/市值)
-            codes = [c.code for c in contexts]
-            contexts = self._fetch_and_convert(codes)
+            # 刷新分时价格 (腾讯API)
+            codes = [c.code for c in l3_passed]
+            l3_passed = self._fetch_and_convert(codes)
 
             # 5分钟K线尾盘指标 — 每轮刷新 (14:55后新bar持续生成)
             if self._kline_provider and codes:
@@ -901,51 +964,11 @@ class LateSessionPipeline:
                     if not df.empty:
                         self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
 
-            # 资金流向 — 首轮刷新 (S2缓存已过~20分钟, 累积数据有增量)
-            if iteration == 1:
-                if self._flow_minute or self._flow_sina or self._flow_push2his:
-                    self._fund_flow_fetched = False
-                    self._enrich_fund_flow(contexts)
-                    self.capital_data_date = (
-                        "today" if self._fund_flow_data else "none"
-                    )
+            # Context富化 + 龙头效应
+            self._enrich_contexts(l3_passed)
+            self._enrich_leader_strength(l3_passed, sector_codes)
 
-            self._enrich_contexts(contexts)
-
-            # 利空公告排查 (首轮, API调用有成本)
-            if iteration == 1:
-                self._enrich_bad_news(contexts)
-
-            # 板块内排名 → 龙头效应增强
-            self._enrich_leader_strength(contexts, sector_codes)
-
-            # L3 技术面验证
-            from screening.layer3_technical import screen_l3_technical
-            l3_passed = screen_l3_technical(
-                contexts, self.preloader, self.funnel.config.l3
-            )
-            self.funnel.stats['l3_count'] = len(l3_passed)
-            logger.info(f"S3 L3通过: {len(l3_passed)} 只")
-            self._log_low_count(l3_passed, "S3 L3技术")
-
-            # 北向资金情绪 (首轮获取)
-            # 注意: 北向日度净买额自 2024-08 起全行业断供, 始终返回不可用
-            if iteration == 1:
-                self.northbound_sentiment = {"available": False}
-                if self.config.enable_northbound:
-                    nb = get_northbound_sentiment()
-                    if nb:
-                        self.northbound_sentiment = nb
-                if self.northbound_sentiment.get("available"):
-                    logger.info(
-                        f"昨日北向资金: 净买入 {self.northbound_sentiment['today_net_yi']}亿, "
-                        f"趋势分 {self.northbound_sentiment['trend_score']:.0f}"
-                    )
-                else:
-                    logger.info("北向资金: 数据不可用 (日度净买额自2024-08起行业断供)")
-
-            # L4 评分
-            from screening.layer4_scoring import score_l4, set_northbound_sentiment, set_concept_analyzer
+            # L4 量化评分 (每轮刷新, 价格敏感的D/E维度随之变化)
             set_northbound_sentiment(self.northbound_sentiment)
             set_concept_analyzer(self.concept_analyzer)
             scored = score_l4(l3_passed, self.funnel.config.l4, self.capital_data_date)
@@ -954,20 +977,11 @@ class LateSessionPipeline:
             if not self._sleep_or_break(self.config.s3_window_end, loop_interval):
                 break
 
+        # 取最后一轮评分最高的30只
         top30 = self.funnel.get_top(scored, 30)
-        self.tracker.stage_end("S3_均线验证", len(scored))
-        self._log_low_count(top30, "S3 L4评分(top30)")
-        return scored, top30
+        logger.info(f"S4 最终L4评分 top30: {len(top30)} 只")
 
-    # ============================================================
-    # S4: 融合评分 + LLM (每10秒循环, 14:57-14:58)
-    # ============================================================
-
-    def _run_stage4(self, top30: list[StockContext]) -> list[StockContext]:
-        """S4: LLM分析 + 融合排序 (单次执行, 纯计算, 无新数据拉取)"""
-        self.tracker.stage_start("S4_评分冲刺", len(top30))
-
-        # LLM并行分析
+        # LLM并行分析 (单次, 在最后评分上执行)
         llm_results = {}
         if self.llm_runner:
             self.tracker.llm_total = len(top30)

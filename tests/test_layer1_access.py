@@ -44,10 +44,11 @@ class TestLayer1Access:
         result = screen_l1_access([ctx])
         assert len(result) == 0
 
-    def test_price_too_high_filtered(self):
+    def test_high_price_passes(self):
+        """股价上限已移除，百元股不受限制 (流动性由成交额/换手率保证)"""
         ctx = make_ctx(price=150.0)
         result = screen_l1_access([ctx])
-        assert len(result) == 0
+        assert len(result) == 1
 
     def test_one_word_limit_up_filtered(self):
         ctx = make_ctx(open=10.78, price=10.78, limit_up=10.78)

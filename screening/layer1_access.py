@@ -7,7 +7,7 @@
 - 当日成交额 > 5000万
 - 换手率 > 1%
 - 尾盘30分钟成交量 > 全天时段均量
-- 5元 < 股价 < 100元 (主板/创业板/科创板价格差异暂忽略)
+- 5元 < 股价 (上限不限，由成交额/换手率保证流动性)
 - 非一字涨停/跌停
 """
 import logging
@@ -72,8 +72,8 @@ def _check_l1(ctx, cfg: L1Config) -> bool:
     if ctx.turnover_rate < cfg.min_turnover_rate:
         return False
 
-    # 价格区间过滤
-    if ctx.price < cfg.min_price or ctx.price > cfg.max_price:
+    # 价格下限过滤 (上限由成交额/换手率保证流动性，不限制百元股)
+    if ctx.price < cfg.min_price:
         return False
 
     # 尾盘成交量 > 全天时段均量 (用午后量比近似)

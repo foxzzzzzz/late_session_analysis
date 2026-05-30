@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 # 调试: 跟踪每个R1检查的失败计数
 _debug_fail_counts = defaultdict(int)
 _debug_fail_details: list[dict] = []
+_debug_r2_fail_counts = defaultdict(int)
+_debug_r2_fail_details: list[dict] = []
 _debug_max_details = int(os.getenv("KL_DEBUG_DETAILS", "3"))
 
 
@@ -79,9 +81,11 @@ def screen_kline(
     Returns:
         通过K线形态筛选的股票列表
     """
-    global _debug_fail_counts, _debug_fail_details
+    global _debug_fail_counts, _debug_fail_details, _debug_r2_fail_counts, _debug_r2_fail_details
     _debug_fail_counts = defaultdict(int)
     _debug_fail_details = []
+    _debug_r2_fail_counts = defaultdict(int)
+    _debug_r2_fail_details = []
 
     daily_cache = daily_cache or {}
     passed: list[StockContext] = []
@@ -134,6 +138,24 @@ def screen_kline(
             f"K线预筛选: {len(passed)}/{len(contexts)} 通过 "
             f"(R1淘汰: {r1_fail}形态+{r1_missing}缺数据, R2警告: {r2_warn})"
         )
+
+    # R2 警告明细 (不淘汰，仅输出)
+    if r2_warn > 0:
+        parts = []
+        for check_name in ["sharp_drop", "continuous_decline", "body_shrink",
+                           "high_break", "close_vs_open", "upper_shadow"]:
+            c = _debug_r2_fail_counts.get(check_name, 0)
+            if c > 0:
+                parts.append(f"{check_name}={c}")
+        if parts:
+            logger.info(f"R2警告分布: {' | '.join(parts)}")
+        for d in _debug_r2_fail_details:
+            logger.debug(
+                f"R2警告详情: code={d['code']} failed={d['failed_checks']} "
+                f"chg={d['change_pct']}% price={d['price']} "
+                f"high={d['high']} open={d['open']} "
+                f"close[-3:]={d['close_last3']}"
+            )
 
     return passed
 
@@ -323,27 +345,44 @@ def _round2_deep_verify(ctx: StockContext, cfg: KlineConfig, df: Optional[pd.Dat
     if df is None or df.empty:
         return True  # 无数据不判失败
 
+    checks = [
+        ("sharp_drop", _check_no_sharp_drop(ctx, cfg, df)),
+        ("continuous_decline", _check_no_continuous_decline(ctx, cfg, df)),
+        ("body_shrink", _check_no_body_shrink(ctx, cfg, df)),
+        ("high_break", _check_high_break(ctx, cfg, df)),
+        ("close_vs_open", _check_close_vs_open(ctx, cfg, df)),
+        ("upper_shadow", _check_upper_shadow(ctx, cfg, df)),
+    ]
+
     all_ok = True
+    for check_name, ok in checks:
+        if not ok:
+            all_ok = False
+            _debug_r2_fail_counts[check_name] += 1
 
-    if not _check_no_sharp_drop(ctx, cfg, df):
-        all_ok = False
-
-    if not _check_no_continuous_decline(ctx, cfg, df):
-        all_ok = False
-
-    if not _check_no_body_shrink(ctx, cfg, df):
-        all_ok = False
-
-    if not _check_high_break(ctx, cfg, df):
-        all_ok = False
-
-    if not _check_close_vs_open(ctx, cfg, df):
-        all_ok = False
-
-    if not _check_upper_shadow(ctx, cfg, df):
-        all_ok = False
+    if not all_ok:
+        _record_r2_debug(ctx, checks, df)
 
     return all_ok
+
+
+def _record_r2_debug(ctx, checks: list[tuple], df: pd.DataFrame):
+    """记录前N条R2失败详情"""
+    if len(_debug_r2_fail_details) >= _debug_max_details:
+        return
+    failed = [name for name, ok in checks if not ok]
+    close = pd.to_numeric(df["close"], errors="coerce")
+    high = pd.to_numeric(df["high"], errors="coerce")
+    open_p = pd.to_numeric(df["open"], errors="coerce")
+    _debug_r2_fail_details.append({
+        "code": ctx.code,
+        "failed_checks": failed,
+        "change_pct": round(ctx.change_pct, 4),
+        "price": round(ctx.price, 2),
+        "high": round(float(high.iloc[-1]), 2) if len(high) > 0 else 0,
+        "open": round(float(open_p.iloc[-1]), 2) if len(open_p) > 0 else 0,
+        "close_last3": [round(float(x), 2) for x in close.iloc[-3:].tolist()] if len(close) >= 3 else [],
+    })
 
 
 def _check_no_sharp_drop(ctx: StockContext, cfg: KlineConfig, df: pd.DataFrame) -> bool:

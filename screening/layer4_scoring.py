@@ -75,6 +75,8 @@ class L4Config:
     ma_alignment_scores: dict = None    # {alignment: score}
     ma5_accel_score: float = 4.0
     price_ma5_tiers: list = None
+    ma5_low_floor_ratio: float = 0.98  # 最低价/MA5 下限, 跌破扣分
+    ma5_low_floor_penalty: float = 3.0 # 跌穿MA5支撑扣分
 
     # E维度: 市场环境
     sector_perf_tiers: list = None
@@ -324,6 +326,10 @@ def _score_ma_system(ctx, max_d: int, cfg) -> float:
     if ctx.ma5 > 0 and ctx.price > 0:
         ratio = ctx.price / ctx.ma5
         score += _tier_score(ratio, cfg.price_ma5_tiers)
+
+    # 最低价不破MA5支撑 — 跌破则扣分 (从L3移至L4随分时价格刷新)
+    if ctx.ma5 > 0 and ctx.low > 0 and ctx.low < ctx.ma5 * cfg.ma5_low_floor_ratio:
+        score -= cfg.ma5_low_floor_penalty
 
     return min(score * scale, max_d)
 

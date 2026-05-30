@@ -100,53 +100,7 @@ def _check_l3(ctx, cfg: L3Config, preloader: Optional[DataPreloader]) -> tuple:
             # 板块下跌，需要更谨慎
             pass  # MVP阶段不直接排除，但后续评分会加权
 
-    # 6. 技术位置 (至少满足一项)
-    tech_ok = False
-
-    # 6a. 收盘站稳MA5 — 分层比率检查 (1.01→1.005→1.0)
-    if ctx.ma5 > 0 and ctx.price > 0:
-        close_ma5_ratio = ctx.price / ctx.ma5
-        if close_ma5_ratio >= 1.01:
-            ctx.ma_alignment = 'above_ma5_strong'
-            tech_ok = True
-        elif close_ma5_ratio >= 1.005:
-            ctx.ma_alignment = 'above_ma5'
-            tech_ok = True
-        elif close_ma5_ratio >= cfg.ma5_close_ratio_min:
-            ctx.ma_alignment = 'above_ma5_weak'
-            tech_ok = True
-
-    # 6b. 最低价不破MA5 (最低价 ≥ MA5 * 0.98)
-    if ctx.ma5 > 0 and ctx.low > 0:
-        if ctx.low >= ctx.ma5 * cfg.ma5_low_ratio_min:
-            if not tech_ok:
-                tech_ok = True
-                ctx.ma_alignment = 'low_above_ma5'
-        else:
-            # 最低价跌破MA5支撑 → 不适合尾盘买入
-            if cfg.require_above_ma and not tech_ok:
-                return False, "tech_position"
-
-    # 6c. 站上10日均线 → 升级ma_alignment; 完整多头排列升级为 bullish
-    if ctx.ma10 > 0 and ctx.price > ctx.ma10:
-        tech_ok = True
-        # 完整多头排列: price>ma5 AND ma5>=ma10 AND price>ma20>ma30>ma60
-        if ('above_ma5' in ctx.ma_alignment and ctx.ma5 >= ctx.ma10
-                and ctx.ma20 > 0 and ctx.ma30 > 0 and ctx.ma60 > 0
-                and ctx.price > ctx.ma20 > ctx.ma30 > ctx.ma60):
-            ctx.ma_alignment = 'bullish'
-
-    # 处于底部区域
-    if ctx.position_20d <= cfg.position_20d_bottom_pct:
-        tech_ok = True
-        if 'bullish' not in ctx.ma_alignment and 'above_ma5' not in ctx.ma_alignment:
-            ctx.ma_alignment = 'bottom_area'
-
-    # 接近关键位置
-    if ctx.near_key_level:
-        tech_ok = True
-
-    if not tech_ok and cfg.require_above_ma:
-        return False, "tech_position"
+    # 6. 价格敏感检查(close/MA5, low/MA5) → 已移至L4 D维度随分时价格刷新
+    #    此处不做淘汰，L3仅保留静态指标过滤
 
     return True, ""

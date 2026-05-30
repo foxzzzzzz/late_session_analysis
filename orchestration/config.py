@@ -110,7 +110,7 @@ class SystemConfig:
 
     # === Pipeline 时间窗口 ===
     s2_window_end: str = "14:55"   # S2 尾盘异常扫描截止
-    s3_window_end: str = "14:57"   # S3 技术面验证截止
+    s3_window_end: str = "14:57"   # S4 L4评分循环截止 (原S3循环已取消, S4复用此截止时间)
 
     # === 报告 ===
     report_output_dir: str = "./reports"

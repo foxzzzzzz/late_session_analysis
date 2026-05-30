@@ -195,7 +195,7 @@ A股 T+0 尾盘买入 / T+1 次日开盘卖出 的短线交易策略。核心假
 | 3 | 非一字板 | `exclude_one_word_limit` | True | — |
 | 4 | 成交额 ≥ 阈值 | `min_turnover` | 50,000,000 (5000万) | `L1_MIN_TURNOVER` |
 | 5 | 换手率 ≥ 阈值 | `min_turnover_rate` | 1.0% | `L1_MIN_TURNOVER_RATE` |
-| 6 | 价格在区间内 | `min_price` / `max_price` | 5.0 / 100.0 | `L1_MIN_PRICE` / `L1_MAX_PRICE` |
+| 6 | 价格不低于下限 | `min_price` | 5.0 (上限已移除) | `L1_MIN_PRICE` |
 | 7 | 午后量 > 时段均量 | `afternoon_volume > avg_period_volume` | — | — |
 
 **全部通过 → `l1_passed = True`**
