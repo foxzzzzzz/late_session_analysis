@@ -19,6 +19,10 @@ class SystemConfig:
     rate_limit_min_sleep: float = 1.5
     rate_limit_max_sleep: float = 3.0
 
+    # === 市场状态 ===
+    regime_mode: str = "auto"              # auto / bull / bear / neutral
+    _regime_overrides: dict = field(default_factory=lambda: {})  # 由 __post_init__ 填充
+
     # === LLM ===
     llm_provider: str = ""
     llm_model: str = ""
@@ -156,6 +160,7 @@ class SystemConfig:
     schedule_time: str = "14:35"
 
     def __post_init__(self):
+        self._init_regime_overrides()
         self._load_from_env()
 
     def _load_from_env(self):
@@ -300,12 +305,120 @@ class SystemConfig:
         self.s2_loop_interval = int(os.getenv("S2_LOOP_INTERVAL", str(self.s2_loop_interval)))
         self.s3_loop_interval = int(os.getenv("S3_LOOP_INTERVAL", str(self.s3_loop_interval)))
 
+        # 市场状态
+        self.regime_mode = os.getenv("REGIME_MODE", self.regime_mode)
+        regime_json = os.getenv("REGIME_OVERRIDES", "")
+        if regime_json:
+            try:
+                self._regime_overrides = json.loads(regime_json)
+            except json.JSONDecodeError:
+                pass
+        # 也支持单参数覆盖: REGIME_BULL_KLINE_MIN_YANG_RATIO_4D=0.75
+        for key, val in os.environ.items():
+            if key.startswith("REGIME_BULL_") or key.startswith("REGIME_BEAR_"):
+                parts = key.split("_", 2)  # REGIME_BULL_xxx → ["REGIME", "BULL", "xxx"]
+                if len(parts) == 3:
+                    regime_dir = parts[1].lower()  # "bull" or "bear"
+                    param = parts[2].lower()
+                    try:
+                        parsed = float(val) if "." in val or val.lstrip("-").isdigit() else val
+                    except ValueError:
+                        parsed = val
+                    self._regime_overrides.setdefault(regime_dir, {})[param] = parsed
+
+    def _init_regime_overrides(self):
+        """初始化牛熊双阈值默认覆盖值"""
+        if self._regime_overrides:
+            return  # 已从 env 加载
+        self._regime_overrides = {
+            "bull": {
+                # K-line: 牛市候选多, 收紧阳线比例, 放宽涨幅/波动限制
+                "kline_min_yang_ratio_4d": 0.75,
+                "kline_min_consecutive_close_rise": 2,
+                "kline_max_atr_pct": 9.0,
+                "kline_max_consecutive_up": 4,
+                "kline_max_single_day_pct": 7.5,
+                "kline_min_close_rise_pct": 0.2,
+                "kline_max_atr_multiple": 2.5,
+                # L2: 跟风资金多, 降低量价门槛
+                "l2_volume_ratio": 1.1,
+                "l2_last5min_vol_pct": 4.0,
+                "l2_late_rally_pct": 1.5,
+                "l2_recovery_drop": 2.5,
+                "l2_recovery_rise": 1.0,
+                "l2_active_buy_pct": 50.0,
+                "l2_late_active_buy_ratio_min": 40.0,
+                "l2_big_order_ratio_mult": 1.1,
+                # L3: 接受更高波动和更低历史胜率
+                "l3_max_volatility": 0.65,
+                "l3_vol_ratio_min": 1.0,
+                "l3_min_history_win": 35.0,
+                "l3_vol_ratio_max": 2.5,
+                # L4: 降低推荐阈值 (~7分)
+                "l4_high_threshold": 78.0,
+                "l4_buy_threshold": 68.0,
+                "l4_medium_threshold": 52.0,
+            },
+            "bear": {
+                # K-line: 收紧波动/涨幅限制, 但不收紧阳线占比
+                "kline_max_atr_pct": 7.0,
+                "kline_max_up_in_9days": 5,
+                "kline_max_single_day_pct": 5.5,
+                "kline_max_atr_multiple": 1.5,
+                # L2: 需要更显著的量价确认
+                "l2_volume_ratio": 1.3,
+                "l2_last5min_vol_pct": 6.0,
+                "l2_late_rally_pct": 2.5,
+                "l2_recovery_drop": 3.5,
+                "l2_recovery_rise": 2.0,
+                "l2_late_active_buy_ratio_min": 50.0,
+                "l2_big_order_ratio_mult": 1.5,
+                # L3: 收紧波动和量比, 提高胜率要求
+                "l3_max_volatility": 0.55,
+                "l3_vol_ratio_min": 1.2,
+                "l3_min_history_win": 45.0,
+                "l3_vol_ratio_max": 1.8,
+                # L4: 保持中性值 (不再提高, 避免零信号)
+            },
+        }
+
+    def _regime_value(self, attr: str, regime: str):
+        """获取指定市场状态下的参数值"""
+        if regime in ("bull", "bear"):
+            override = self._regime_overrides.get(regime, {}).get(attr)
+            if override is not None:
+                return override
+        return getattr(self, attr)
+
+    def resolve_regime(self, force: str = None) -> str:
+        """解析当前应使用的市场状态
+
+        Args:
+            force: 手动指定值 (bull/bear/neutral), 覆盖自动判定
+        Returns:
+            "bull" | "bear" | "neutral"
+        """
+        if force and force != "auto":
+            return force
+        if self.regime_mode != "auto":
+            return self.regime_mode
+        from screening.market_regime import determine_regime
+        return determine_regime()
+
     def need_llm(self) -> bool:
         """是否配置了LLM"""
         return bool(self.llm_api_key)
 
-    def get_screening_configs(self):
-        """导出为各层配置对象"""
+    def get_screening_configs(self, regime: str = None):
+        """导出为各层配置对象
+
+        Args:
+            regime: "bull" | "bear" | "neutral" | None (=neutral)
+        """
+        if regime is None:
+            regime = "neutral"
+        rv = lambda attr: self._regime_value(attr, regime)
+
         from screening.layer1_access import L1Config
         from screening.layer2_anomaly import L2Config
         from screening.layer3_technical import L3Config
@@ -322,46 +435,46 @@ class SystemConfig:
             ),
             'kline': KlineConfig(
                 min_atr_pct=self.kline_min_atr_pct,
-                max_atr_pct=self.kline_max_atr_pct,
-                max_consecutive_up=self.kline_max_consecutive_up,
-                max_up_in_9days=self.kline_max_up_in_9days,
-                max_single_day_pct=self.kline_max_single_day_pct,
-                min_yang_ratio_4d=self.kline_min_yang_ratio_4d,
-                min_consecutive_close_rise=self.kline_min_consecutive_close_rise,
-                min_close_rise_pct=self.kline_min_close_rise_pct,
-                max_atr_multiple=self.kline_max_atr_multiple,
+                max_atr_pct=rv("kline_max_atr_pct"),
+                max_consecutive_up=rv("kline_max_consecutive_up"),
+                max_up_in_9days=rv("kline_max_up_in_9days"),
+                max_single_day_pct=rv("kline_max_single_day_pct"),
+                min_yang_ratio_4d=rv("kline_min_yang_ratio_4d"),
+                min_consecutive_close_rise=rv("kline_min_consecutive_close_rise"),
+                min_close_rise_pct=rv("kline_min_close_rise_pct"),
+                max_atr_multiple=rv("kline_max_atr_multiple"),
                 max_drop_ratio=self.kline_max_drop_ratio,
                 max_consecutive_decline=self.kline_max_consecutive_decline,
                 max_consecutive_body_shrink=self.kline_max_consecutive_body_shrink,
                 max_upper_shadow_ratio=self.kline_max_upper_shadow_ratio,
             ),
             'l2': L2Config(
-                volume_ratio_min=self.l2_volume_ratio,
-                last_5min_vol_pct_min=self.l2_last5min_vol_pct,
-                late_rally_min=self.l2_late_rally_pct,
-                recovery_drop_min=self.l2_recovery_drop,
-                recovery_rise_min=self.l2_recovery_rise,
-                active_buy_ratio_min=self.l2_active_buy_pct,
-                late_active_buy_ratio_min=self.l2_late_active_buy_ratio_min,
+                volume_ratio_min=rv("l2_volume_ratio"),
+                last_5min_vol_pct_min=rv("l2_last5min_vol_pct"),
+                late_rally_min=rv("l2_late_rally_pct"),
+                recovery_drop_min=rv("l2_recovery_drop"),
+                recovery_rise_min=rv("l2_recovery_rise"),
+                active_buy_ratio_min=rv("l2_active_buy_pct"),
+                late_active_buy_ratio_min=rv("l2_late_active_buy_ratio_min"),
                 require_capital=self.l2_require_capital,
                 big_order_net_min=self.l2_big_order_net_min,
-                big_order_ratio_mult=self.l2_big_order_ratio_mult,
+                big_order_ratio_mult=rv("l2_big_order_ratio_mult"),
                 cancel_rate_max=self.l2_cancel_rate_max,
                 require_orderbook=self.l2_require_orderbook,
             ),
             'l3': L3Config(
                 sector_rank_top_pct=self.l3_sector_rank_top_pct,
-                min_history_win_rate=self.l3_min_history_win,
-                max_volatility=self.l3_max_volatility,
-                vol_ratio_min=self.l3_vol_ratio_min,
-                vol_ratio_max=self.l3_vol_ratio_max,
+                min_history_win_rate=rv("l3_min_history_win"),
+                max_volatility=rv("l3_max_volatility"),
+                vol_ratio_min=rv("l3_vol_ratio_min"),
+                vol_ratio_max=rv("l3_vol_ratio_max"),
                 ma5_close_ratio_min=self.l3_ma5_close_ratio_min,
                 ma5_low_ratio_min=self.l3_ma5_low_ratio_min,
             ),
             'l4': L4Config(
-                high_attention_threshold=self.l4_high_threshold,
-                medium_attention_threshold=self.l4_medium_threshold,
-                buy_threshold=self.l4_buy_threshold,
+                high_attention_threshold=rv("l4_high_threshold"),
+                medium_attention_threshold=rv("l4_medium_threshold"),
+                buy_threshold=rv("l4_buy_threshold"),
                 max_high_attention=self.l4_max_high_attention,
                 max_total_output=self.l4_max_total_output,
                 late_price_tiers=json.loads(self.l4_late_price_tiers),

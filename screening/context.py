@@ -60,6 +60,9 @@ class StockContext:
     # === S1 K线形态 ===
     kline_passed: Optional[bool] = None
 
+    # === 市场状态 ===
+    market_regime: str = "neutral"       # bull / bear / neutral (管线启动时判定)
+
     # === L3: 技术面 ===
     ma5: float = 0.0
     ma10: float = 0.0

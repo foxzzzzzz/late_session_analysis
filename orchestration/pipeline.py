@@ -49,11 +49,18 @@ class LateSessionPipeline:
         self.cache = StockMetricsCache()
         self.preloader = DataPreloader()
 
+        # 市场状态判定 (14:25前拉取上证日线)
+        self.regime = config.resolve_regime()
+        logger.info(
+            f"市场状态: {self.regime} "
+            f"(模式: {config.regime_mode})"
+        )
+
         # 初始化数据源
         self.fetcher_mgr = self._init_fetchers()
 
-        # 初始化漏斗
-        screening_configs = config.get_screening_configs()
+        # 初始化漏斗 (根据市场状态选择阈值)
+        screening_configs = config.get_screening_configs(self.regime)
         self.funnel = FunnelPipeline(
             config=FunnelConfig(**screening_configs),
             preloader=self.preloader,
@@ -315,6 +322,7 @@ class LateSessionPipeline:
           - 资金流向: 东财 push2his/push2 (EastmoneyFlowFetcher)
         """
         for ctx in contexts:
+            ctx.market_regime = self.regime
             # === 日线指标: MA5/MA10/MA20, 波动率 ===
             dm = self._daily_metrics.get(ctx.code)
             if dm:

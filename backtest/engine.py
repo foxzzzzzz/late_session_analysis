@@ -33,70 +33,28 @@ class BacktestEngine:
         self.all_candidate_codes: list[str] = []
         self.sector_map: dict[str, str] = {}
 
-        # 筛选配置 (复用实时管线的阈值)
-        self.l1_config = L1Config(
-            min_turnover=self.config.l1_min_turnover,
-            min_turnover_rate=self.config.l1_min_turnover_rate,
-            min_price=self.config.l1_min_price,
-            max_price=self.config.l1_max_price,
-        )
-        self.l2_config = L2Config(
-            volume_ratio_min=self.config.l2_volume_ratio,
-            last_5min_vol_pct_min=self.config.l2_last5min_vol_pct,
-            late_rally_min=self.config.l2_late_rally_pct,
-            recovery_drop_min=self.config.l2_recovery_drop,
-            recovery_rise_min=self.config.l2_recovery_rise,
-            active_buy_ratio_min=self.config.l2_active_buy_pct,
-            late_active_buy_ratio_min=self.config.l2_late_active_buy_ratio_min,
-            require_capital=True,
-            require_orderbook=False,
-        )
-        self.l3_config = L3Config(
-            require_above_ma=True,
-            min_history_win_rate=self.config.l3_min_history_win,
-            max_volatility=getattr(self.config, 'l3_max_volatility', 0.60),
-            max_consecutive_limits=getattr(self.config, 'l3_max_consecutive_limits', 1),
-            sector_rank_top_pct=self.config.l3_sector_rank_top_pct,
-        )
-        self.l4_config = L4Config(
-            late_price_tiers=json.loads(self.config.l4_late_price_tiers),
-            vol_ratio_tiers=json.loads(self.config.l4_vol_ratio_tiers),
-            last5min_bonus_tiers=json.loads(self.config.l4_last5min_bonus_tiers),
-            big_order_tiers=json.loads(self.config.l4_big_order_tiers),
-            big_order_net_score=self.config.l4_big_order_net_score,
-            bid_ask_tiers=json.loads(self.config.l4_bid_ask_tiers),
-            yang_days_tiers=json.loads(self.config.l4_yang_days_tiers),
-            close_rise_tiers=json.loads(self.config.l4_close_rise_tiers),
-            volatility_penalty_tiers=json.loads(self.config.l4_volatility_penalty_tiers),
-            body_amplifying_score=self.config.l4_body_amplifying_score,
-            yang_no_amplify_score=self.config.l4_yang_no_amplify_score,
-            broke_high_score=self.config.l4_broke_high_score,
-            breakout_score=self.config.l4_breakout_score,
-            flow_net_tiers=json.loads(self.config.l4_flow_net_tiers),
-            flow_net_positive_score=self.config.l4_flow_net_positive_score,
-            flow_ratio_score=self.config.l4_flow_ratio_score,
-            active_buy_tiers=json.loads(self.config.l4_active_buy_tiers),
-            northbound_tiers=json.loads(self.config.l4_northbound_tiers),
-            ma_alignment_scores=json.loads(self.config.l4_ma_alignment_scores),
-            ma5_accel_score=self.config.l4_ma5_accel_score,
-            price_ma5_tiers=json.loads(self.config.l4_price_ma5_tiers),
-            sector_perf_tiers=json.loads(self.config.l4_sector_perf_tiers),
-            concept_weight=self.config.l4_concept_weight,
-            concept_max=self.config.l4_concept_max,
-            hot_concept_per_item=self.config.l4_hot_concept_per_item,
-            hot_concept_max=self.config.l4_hot_concept_max,
-            leader_bonus=self.config.l4_leader_bonus,
-        )
-        self.kline_config = KlineConfig(
-            min_atr_pct=self.config.kline_min_atr_pct,
-            max_atr_pct=self.config.kline_max_atr_pct,
-            max_consecutive_up=self.config.kline_max_consecutive_up,
-            max_up_in_9days=self.config.kline_max_up_in_9days,
-            max_single_day_pct=self.config.kline_max_single_day_pct,
-            min_yang_ratio_4d=self.config.kline_min_yang_ratio_4d,
-            min_consecutive_close_rise=self.config.kline_min_consecutive_close_rise,
-            min_close_rise_pct=self.config.kline_min_close_rise_pct,
-        )
+        # 预计算全部3种市场状态的筛选配置
+        self._regime_configs: dict[str, dict] = {}
+        for r in ["bull", "bear", "neutral"]:
+            self._regime_configs[r] = self.config.get_screening_configs(regime=r)
+
+        # 默认使用中性配置 (auto模式会在每日循环中动态切换)
+        self._set_configs_for_regime("neutral")
+        if self.config.regime_mode != "auto":
+            self._set_configs_for_regime(self.config.regime_mode)
+            logger.info(f"回测市场状态(固定): {self.config.regime_mode}")
+
+        # 逐日regime (auto模式在run()中填充)
+        self._day_regimes: dict[str, str] = {}
+
+    def _set_configs_for_regime(self, regime: str):
+        """将当前筛选配置切换到指定市场状态"""
+        cfgs = self._regime_configs[regime]
+        self.l1_config = cfgs["l1"]
+        self.kline_config = cfgs["kline"]
+        self.l2_config = cfgs["l2"]
+        self.l3_config = cfgs["l3"]
+        self.l4_config = cfgs["l4"]
 
     def run(self) -> dict:
         """执行回测"""
@@ -108,6 +66,21 @@ class BacktestEngine:
         # 2. 获取交易日列表
         trading_days = self.loader.get_trading_days(self.config.start_date, self.config.end_date)
         logger.info(f"回测区间: {self.config.start_date} → {self.config.end_date}, {len(trading_days)} 个交易日")
+
+        # 2b. 加载上证指数日线 + 逐日判定市场状态 (auto模式)
+        if self.config.regime_mode == "auto":
+            sh_index_bars = self._load_sh_index_bars()
+            if sh_index_bars is not None and not sh_index_bars.empty:
+                self._detect_daily_regimes(trading_days, sh_index_bars)
+                bull_days = sum(1 for d in trading_days if self._day_regimes.get(d) == "bull")
+                bear_days = sum(1 for d in trading_days if self._day_regimes.get(d) == "bear")
+                neutral_days = sum(1 for d in trading_days if self._day_regimes.get(d) == "neutral")
+                logger.info(
+                    f"市场状态分布: bull={bull_days}d bear={bear_days}d "
+                    f"neutral={neutral_days}d"
+                )
+            else:
+                logger.warning("上证指数数据不可用, auto模式降级为neutral")
 
         # 3. 预加载日线数据 (全部候选股，整段缓存)
         logger.info(f"预加载日线数据: {len(self.all_candidate_codes)} 只候选股")
@@ -131,8 +104,9 @@ class BacktestEngine:
                 self.trade_log.record_day(day_result)
                 n_trades = len(day_result.trades)
                 if n_trades > 0 or day_result.buy_signals > 0:
+                    regime_str = self._day_regimes.get(day, self.config.regime_mode)
                     logger.info(
-                        f"[{day}] S1={day_result.s1_count} S2={day_result.s2_count} "
+                        f"[{day}] {regime_str} S1={day_result.s1_count} S2={day_result.s2_count} "
                         f"S3={day_result.s3_count} S4={day_result.s4_count} "
                         f"信号={day_result.buy_signals} 交易={n_trades}"
                     )
@@ -187,11 +161,105 @@ class BacktestEngine:
         logger.info(f"候选池: {len(self.all_candidate_codes)} 只 (来自 {len(self.sector_codes)} 个板块)")
 
     # ============================================================
+    # 市场状态判定 (回测逐日)
+    # ============================================================
+
+    def _load_sh_index_bars(self) -> "pd.DataFrame | None":
+        """加载上证指数(999999)日线数据用于逐日市场状态判定"""
+        try:
+            import baostock as bs
+            bs.login()
+            try:
+                fetch_start = f"{self.config.start_date[:4]}-{self.config.start_date[4:6]}-{self.config.start_date[6:8]}"
+                fetch_end = f"{self.config.end_date[:4]}-{self.config.end_date[4:6]}-{self.config.end_date[6:8]}"
+                # 多拉60天用于20日收益计算
+                import pandas as pd
+                extended_start = (pd.Timestamp(fetch_start) - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
+                rs = bs.query_history_k_data_plus(
+                    "sh.000001",
+                    "date,close",
+                    start_date=extended_start, end_date=fetch_end,
+                    frequency="d", adjustflag="3",
+                )
+                if rs.error_code != "0":
+                    logger.warning(f"上证指数查询失败: {rs.error_msg}")
+                    return None
+                rows = []
+                while rs.next():
+                    rows.append(rs.get_row_data())
+                if not rows:
+                    return None
+                df = pd.DataFrame(rows, columns=["date", "close"])
+                df["close"] = pd.to_numeric(df["close"], errors="coerce")
+                return df.dropna(subset=["close"])
+            finally:
+                bs.logout()
+        except Exception as e:
+            logger.warning(f"上证指数加载失败: {e}")
+            return None
+
+    def _detect_daily_regimes(self, trading_days: list[str], index_df: "pd.DataFrame"):
+        """逐日判定市场状态, 含防抖 (按时间顺序, 模拟实盘)"""
+        prev_state = {"regime": "neutral", "consecutive_days": 0}
+        for day in trading_days:
+            day_ts = pd.Timestamp(f"{day[:4]}-{day[4:6]}-{day[6:8]}")
+            mask = pd.to_datetime(index_df["date"]) <= day_ts
+            day_data = index_df[mask]
+            if len(day_data) < 25:
+                self._day_regimes[day] = "neutral"
+                continue
+
+            close = day_data["close"].dropna()
+            if len(close) < 25:
+                self._day_regimes[day] = "neutral"
+                continue
+
+            # 因子1: 20日收益率
+            ret_20d = (float(close.iloc[-1]) - float(close.iloc[-21])) / float(close.iloc[-21]) * 100
+            # 因子2: vs MA20
+            ma20 = float(close.iloc[-20:].mean())
+            above_ma20 = float(close.iloc[-1]) > ma20
+
+            bull_score = 0
+            if ret_20d >= 2:
+                bull_score += 1
+            elif ret_20d <= -2:
+                bull_score -= 1
+            if above_ma20:
+                bull_score += 1
+            else:
+                bull_score -= 1
+
+            if bull_score > 0:
+                today_raw = "bull"
+            elif bull_score < 0:
+                today_raw = "bear"
+            else:
+                today_raw = "neutral"
+
+            # 防抖: 连续2天同方向才切换, neutral立即生效
+            if today_raw == prev_state["regime"]:
+                final = today_raw
+                prev_state["consecutive_days"] += 1
+            elif prev_state["regime"] == "neutral" or today_raw == "neutral":
+                final = today_raw
+                prev_state = {"regime": today_raw, "consecutive_days": 1}
+            else:
+                final = prev_state["regime"]
+
+            self._day_regimes[day] = final
+
+    # ============================================================
     # 单日回测
     # ============================================================
 
     def _run_single_day(self, date_str: str, next_date: Optional[str]) -> DayResult:
         t0 = time.time()
+
+        # 逐日regime切换 (auto模式)
+        regime = self._day_regimes.get(date_str)
+        if regime:
+            self._set_configs_for_regime(regime)
 
         # 1. 获取当日日线快照
         snapshot = self.loader.get_daily_snapshot(self.daily_bars, date_str)
@@ -454,11 +522,14 @@ class BacktestEngine:
         top30 = sorted_ctx[:self.l4_config.max_total_output]
 
         # 融合排序 (纯规则，rule_weight=1.0, 回测专用阈值)
+        regime = self._day_regimes.get(date_str, self.config.regime_mode)
+        if regime == "auto":
+            regime = "neutral"
         merge_and_rank(
             top30, llm_results={}, rule_weight=1.0,
-            strong_buy_threshold=self.config.l4_strong_buy,
-            buy_threshold=self.config.l4_buy,
-            watch_threshold=self.config.l4_watch,
+            strong_buy_threshold=self.config._regime_value("l4_strong_buy", regime),
+            buy_threshold=self.config._regime_value("l4_buy", regime),
+            watch_threshold=self.config._regime_value("l4_watch", regime),
         )
 
         return top30

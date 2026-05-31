@@ -70,6 +70,11 @@ def parse_args():
         '--dry-run', action='store_true',
         help='仅拉取数据并显示摘要，不做分析和报告',
     )
+    parser.add_argument(
+        '--regime', type=str, default='auto',
+        choices=['auto', 'bull', 'bear', 'neutral'],
+        help='市场状态: auto(自动判定) / bull / bear / neutral (默认: auto)',
+    )
     return parser.parse_args()
 
 
@@ -100,6 +105,10 @@ def main():
     if args.no_llm:
         os.environ['LLM_API_KEY'] = ''
         config.llm_api_key = ''
+
+    if args.regime != 'auto':
+        config.regime_mode = args.regime
+        logger.info(f">>> 手动市场状态: {args.regime} <<<")
 
     # 解析阶段 (--stages 0,1,2,3,4 逗号分隔)
     stages = None

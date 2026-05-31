@@ -91,6 +91,9 @@ def parse_args():
                         help='每日最大持仓数 (默认 5)')
     parser.add_argument('--slippage', type=float, default=0,
                         help='滑点 bps (默认 5.0)')
+    parser.add_argument('--regime', type=str, default='auto',
+                        choices=['auto', 'bull', 'bear', 'neutral'],
+                        help='市场状态: auto(逐日判定) / bull / bear / neutral (默认: auto)')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='详细日志 (DEBUG级别)')
     return parser.parse_args()
@@ -126,6 +129,9 @@ def main():
         config.max_positions = args.max_positions
     if args.slippage > 0:
         config.slippage_bps = args.slippage
+    if args.regime != 'auto':
+        config.regime_mode = args.regime
+        logger.info(f">>> 回测市场状态: {args.regime} <<<")
 
     # 验证必要配置
     if not config.target_sectors:
@@ -139,6 +145,7 @@ def main():
     print(f"  回测区间: {config.start_date} → {config.end_date}")
     print(f"  目标板块: {', '.join(config.target_sectors)}")
     print(f"  数据源: baostock (日线+5分钟线)")
+    print(f"  市场状态: {config.regime_mode}")
     print(f"  5分钟线: {'启用' if config.use_5min_data else '禁用(近似)'}")
     print(f"  资金流: {config.capital_flow_mode} (历史数据不可用)")
     print(f"  LLM: 不可用 (纯规则评分)")
