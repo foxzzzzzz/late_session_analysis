@@ -30,8 +30,8 @@
 
 | 参数 | 实盘值 | 回测值 | 原因 |
 |------|--------|--------|------|
-| `min_yang_ratio_4d` | 0.75 (3/4) | **0.50** (2/4) | 实盘追求高胜率；回测放宽以获取更多样本评估策略 |
-| `min_consecutive_close_rise` | 3天 | **2天** | 同上，避免震荡行情中无信号 |
+| `min_yang_ratio_4d` | 0.50 | 0.50 | 已对齐（实测0.75过高，统一降至0.50） |
+| `min_consecutive_close_rise` | 3天 | 3天 | 已对齐（从回测2天修复为实盘3天） |
 
 可通过 `BT_KLINE_MIN_YANG_RATIO_4D`、`BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE` 等环境变量覆盖。
 
@@ -39,9 +39,9 @@
 
 | 参数 | 实盘值 | 回测值 | 原因 |
 |------|--------|--------|------|
-| `l4_strong_buy` | 85 | **35** | 回测无资金流数据（C维度20分全为0），分数天花板~65 |
-| `l4_buy` | 75 | **25** | 实盘85/75/60在完整5维100分制下校准，不适用于回测 |
-| `l4_watch` | 60 | **15** | |
+| `l4_strong_buy` | 85 | **55** | 回测无资金流数据（C维度20分全为0），分数天花板~65 |
+| `l4_buy` | 75 | **48** | 实盘85/75/60在完整5维100分制下校准，不适用于回测 |
+| `l4_watch` | 60 | **38** | |
 
 可通过 `BT_L4_STRONG_BUY`、`BT_L4_BUY`、`BT_L4_WATCH` 环境变量覆盖。
 
@@ -98,14 +98,14 @@
 ## 八、环境变量速查
 
 ```bash
-# K线阈值（回测默认比实盘宽松）
-BT_KLINE_MIN_YANG_RATIO_4D=0.50        # 实盘: 0.75
-BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE=2  # 实盘: 3
+# K线阈值（回测默认与实盘对齐）
+BT_KLINE_MIN_YANG_RATIO_4D=0.50        # 实盘: 0.50
+BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE=3  # 实盘: 3
 
-# L4阈值（回测默认比实盘低）
-BT_L4_STRONG_BUY=35   # 实盘: 85
-BT_L4_BUY=25          # 实盘: 75
-BT_L4_WATCH=15        # 实盘: 60
+# L4阈值（回测默认比实盘低，因无资金流数据）
+BT_L4_STRONG_BUY=55   # 实盘: 85
+BT_L4_BUY=48          # 实盘: 75
+BT_L4_WATCH=38        # 实盘: 60
 
 # 日常使用
 BT_START_DATE=20260401  # 回测起始日期

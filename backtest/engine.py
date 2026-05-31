@@ -1,4 +1,5 @@
 """回测引擎 — 逐交易日循环 S1→S2→S3→S4"""
+import json
 import logging
 import time
 from typing import Optional
@@ -46,6 +47,7 @@ class BacktestEngine:
             recovery_drop_min=self.config.l2_recovery_drop,
             recovery_rise_min=self.config.l2_recovery_rise,
             active_buy_ratio_min=self.config.l2_active_buy_pct,
+            late_active_buy_ratio_min=self.config.l2_late_active_buy_ratio_min,
             require_capital=True,
             require_orderbook=False,
         )
@@ -56,7 +58,35 @@ class BacktestEngine:
             max_consecutive_limits=getattr(self.config, 'l3_max_consecutive_limits', 1),
             sector_rank_top_pct=self.config.l3_sector_rank_top_pct,
         )
-        self.l4_config = L4Config()
+        self.l4_config = L4Config(
+            late_price_tiers=json.loads(self.config.l4_late_price_tiers),
+            vol_ratio_tiers=json.loads(self.config.l4_vol_ratio_tiers),
+            last5min_bonus_tiers=json.loads(self.config.l4_last5min_bonus_tiers),
+            big_order_tiers=json.loads(self.config.l4_big_order_tiers),
+            big_order_net_score=self.config.l4_big_order_net_score,
+            bid_ask_tiers=json.loads(self.config.l4_bid_ask_tiers),
+            yang_days_tiers=json.loads(self.config.l4_yang_days_tiers),
+            close_rise_tiers=json.loads(self.config.l4_close_rise_tiers),
+            volatility_penalty_tiers=json.loads(self.config.l4_volatility_penalty_tiers),
+            body_amplifying_score=self.config.l4_body_amplifying_score,
+            yang_no_amplify_score=self.config.l4_yang_no_amplify_score,
+            broke_high_score=self.config.l4_broke_high_score,
+            breakout_score=self.config.l4_breakout_score,
+            flow_net_tiers=json.loads(self.config.l4_flow_net_tiers),
+            flow_net_positive_score=self.config.l4_flow_net_positive_score,
+            flow_ratio_score=self.config.l4_flow_ratio_score,
+            active_buy_tiers=json.loads(self.config.l4_active_buy_tiers),
+            northbound_tiers=json.loads(self.config.l4_northbound_tiers),
+            ma_alignment_scores=json.loads(self.config.l4_ma_alignment_scores),
+            ma5_accel_score=self.config.l4_ma5_accel_score,
+            price_ma5_tiers=json.loads(self.config.l4_price_ma5_tiers),
+            sector_perf_tiers=json.loads(self.config.l4_sector_perf_tiers),
+            concept_weight=self.config.l4_concept_weight,
+            concept_max=self.config.l4_concept_max,
+            hot_concept_per_item=self.config.l4_hot_concept_per_item,
+            hot_concept_max=self.config.l4_hot_concept_max,
+            leader_bonus=self.config.l4_leader_bonus,
+        )
         self.kline_config = KlineConfig(
             min_atr_pct=self.config.kline_min_atr_pct,
             max_atr_pct=self.config.kline_max_atr_pct,

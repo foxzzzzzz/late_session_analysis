@@ -77,7 +77,7 @@ class BacktestConfig(SystemConfig):
         self.kline_max_up_in_9days = int(os.getenv("BT_KLINE_MAX_UP_IN_9DAYS", str(self.kline_max_up_in_9days)))
         self.kline_max_single_day_pct = float(os.getenv("BT_KLINE_MAX_SINGLE_DAY_PCT", str(self.kline_max_single_day_pct)))
         self.kline_min_yang_ratio_4d = float(os.getenv("BT_KLINE_MIN_YANG_RATIO_4D", "0.50"))
-        self.kline_min_consecutive_close_rise = int(os.getenv("BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE", "2"))
+        self.kline_min_consecutive_close_rise = int(os.getenv("BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE", str(self.kline_min_consecutive_close_rise)))
         self.kline_min_close_rise_pct = float(os.getenv("BT_KLINE_MIN_CLOSE_RISE_PCT", str(self.kline_min_close_rise_pct)))
 
         # 回测 L4 推荐阈值 — 回测缺资金流+LLM+盘口, 实际上限~67分
