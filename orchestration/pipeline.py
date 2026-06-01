@@ -985,6 +985,11 @@ class LateSessionPipeline:
 
         from screening.layer4_scoring import score_l4, set_northbound_sentiment, set_concept_analyzer
 
+        # 候选池≤3只时，K线/资金/概念等维度均为静态，多轮循环无意义
+        single_round = len(l3_passed) <= 3
+        if single_round:
+            logger.info(f"S4 候选池仅{len(l3_passed)}只，单轮评分 (跳过多轮循环)")
+
         while True:
             iteration += 1
             logger.info(f"S4 第{iteration}轮评分...")
@@ -1011,6 +1016,9 @@ class LateSessionPipeline:
             set_concept_analyzer(self.concept_analyzer)
             scored = score_l4(l3_passed, self.funnel.config.l4, self.capital_data_date)
             self.funnel.stats['l4_count'] = len(scored)
+
+            if single_round:
+                break
 
             if not self._sleep_or_break(self.config.s3_window_end, loop_interval):
                 break
@@ -1040,22 +1048,34 @@ class LateSessionPipeline:
 
         rule_cfg = getattr(self.funnel.config, 'rule_scorer', None)
 
+        # 推荐阈值: 从config读取regime感知基准值, 按数据缺失场景打折
+        base_sb = self.config._regime_value("l4_high_threshold", self.regime)
+        base_buy = self.config._regime_value("l4_buy_threshold", self.regime)
+        base_watch = self.config._regime_value("l4_medium_threshold", self.regime)
+
         if capital_ok and llm_ok:
-            top30 = merge_and_rank(top30, llm_results, rule_weight=0.7,
-                strong_buy_threshold=80, buy_threshold=72, watch_threshold=55,
-                rule_scorer_cfg=rule_cfg)
+            offset = 0
+            rule_weight = 0.7
         elif capital_ok and not llm_ok:
-            top30 = merge_and_rank(top30, llm_results, rule_weight=1.0,
-                strong_buy_threshold=75, buy_threshold=65, watch_threshold=50,
-                rule_scorer_cfg=rule_cfg)
+            offset = -7
+            rule_weight = 1.0
         elif not capital_ok and llm_ok:
-            top30 = merge_and_rank(top30, llm_results, rule_weight=0.7,
-                strong_buy_threshold=72, buy_threshold=62, watch_threshold=48,
-                rule_scorer_cfg=rule_cfg)
+            offset = -10
+            rule_weight = 0.7
         else:
-            top30 = merge_and_rank(top30, llm_results, rule_weight=1.0,
-                strong_buy_threshold=65, buy_threshold=55, watch_threshold=40,
-                rule_scorer_cfg=rule_cfg)
+            offset = -17
+            rule_weight = 1.0
+
+        logger.info(
+            f"S4 推荐阈值 (regime={self.regime}): "
+            f"strong_buy≥{base_sb + offset:.0f} buy≥{base_buy + offset:.0f} watch≥{base_watch + offset:.0f}"
+        )
+
+        top30 = merge_and_rank(top30, llm_results, rule_weight=rule_weight,
+            strong_buy_threshold=base_sb + offset,
+            buy_threshold=base_buy + offset,
+            watch_threshold=base_watch + offset,
+            rule_scorer_cfg=rule_cfg)
 
         self.tracker.stage_end("S4_评分冲刺", len(top30))
         return top30
