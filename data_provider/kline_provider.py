@@ -5,9 +5,14 @@
   - 20日年化波动率 (日线)
   - 14日ATR (日线)
   - 尾盘指标 (5分钟线): 午后量比、尾盘涨跌幅、最后5分钟占比、突破日内高点
+
+日线双源回退: mootdx TCP → Sina HTTP (借鉴TradingAgents方案)
 """
+import json
 import logging
 import os
+import time
+import urllib.request
 from datetime import datetime
 from typing import Optional
 
@@ -15,6 +20,13 @@ import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# Sina 日K线 API (JSON, 无需key, 不封IP)
+_SINA_KLINE_URL = (
+    "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+    "CN_MarketData.getKLineData"
+    "?symbol={prefix}{code}&scale=240&ma=no&datalen={bars}"
+)
 
 
 class KlineProvider:
@@ -39,11 +51,13 @@ class KlineProvider:
 
         带 parquet 磁盘缓存 (当天有效，日线盘中不变)。
         单只失败不阻塞批量。
+        mootdx TCP 失败 → Sina HTTP 回退。
         """
         today = datetime.now().strftime("%Y%m%d")
         result = {}
         fetched = 0
         cached = 0
+        sina_fallback = 0
 
         for code in codes:
             code = str(code).zfill(6)
@@ -61,25 +75,90 @@ class KlineProvider:
                     pass
 
             # 从 mootdx 获取
+            df = None
             try:
                 df = self._client.bars(symbol=code, frequency=9, offset=bars)
                 if df is not None and not df.empty:
                     df = self._normalize_columns(df)
-                    try:
-                        df.to_parquet(cache_file, index=False)
-                    except Exception:
-                        pass
-                    result[code] = df
-                    fetched += 1
             except Exception as e:
-                logger.debug(f"日线获取失败 {code}: {e}")
+                logger.debug(f"日线 mootdx 获取失败 {code}: {e}")
 
-        if fetched or cached:
-            logger.info(
-                f"日线加载: {len(result)}/{len(codes)} 只 "
-                f"(缓存 {cached}, 新拉取 {fetched})"
-            )
+            # Sina HTTP 回退
+            if df is None or df.empty:
+                df = self._sina_daily(code, bars)
+                if df is not None and not df.empty:
+                    sina_fallback += 1
+
+            if df is not None and not df.empty:
+                try:
+                    df.to_parquet(cache_file, index=False)
+                except Exception:
+                    pass
+                result[code] = df
+                fetched += 1
+
+        parts = [f"{len(result)}/{len(codes)} 只 (缓存 {cached}, 新拉取 {fetched}"]
+        if sina_fallback:
+            parts.append(f"Sina回退 {sina_fallback}")
+        parts.append(")")
+        logger.info(f"日线加载: {', '.join(parts)}")
         return result
+
+    @staticmethod
+    def _sina_code_prefix(code: str) -> str:
+        """股票代码 → Sina API 前缀"""
+        code = str(code).zfill(6)
+        if code.startswith("6"):
+            return "sh"
+        elif code.startswith("8") or code.startswith("9"):
+            return "bj"
+        return "sz"
+
+    @staticmethod
+    def _sina_daily(code: str, bars: int = 30) -> Optional[pd.DataFrame]:
+        """Sina HTTP 日K线回退 — 当 mootdx TCP 不可用时的降级方案
+
+        借鉴 TradingAgents-astock 方案。
+        Sina API 返回 JSON，不含 amount (成交额)，volume 单位是股。
+        """
+        prefix = KlineProvider._sina_code_prefix(code)
+        url = _SINA_KLINE_URL.format(prefix=prefix, code=code, bars=bars)
+
+        try:
+            req = urllib.request.Request(url)
+            req.add_header("User-Agent", "Mozilla/5.0")
+            resp = urllib.request.urlopen(req, timeout=10)
+            raw = resp.read().decode("utf-8")
+            data = json.loads(raw)
+        except Exception as e:
+            logger.debug(f"Sina 日线回退失败 {code}: {e}")
+            return None
+
+        if not data or not isinstance(data, list):
+            return None
+
+        rows = []
+        for bar in data:
+            try:
+                rows.append({
+                    "datetime": bar.get("day", ""),
+                    "open": float(bar.get("open", 0)),
+                    "high": float(bar.get("high", 0)),
+                    "low": float(bar.get("low", 0)),
+                    "close": float(bar.get("close", 0)),
+                    "volume": float(bar.get("volume", 0)),
+                    # Sina 不提供成交额，用 close * volume 估算 (偏差大但可用)
+                    "amount": float(bar.get("close", 0)) * float(bar.get("volume", 0)),
+                })
+            except (ValueError, TypeError):
+                continue
+
+        if not rows:
+            return None
+
+        df = pd.DataFrame(rows)
+        df["turnover"] = df["amount"]
+        return df
 
     def load_5min_batch(self, codes: list[str], bars: int = 48) -> dict[str, pd.DataFrame]:
         """批量获取当日5分钟线，每只默认48根 (全天240分钟/5=48)。

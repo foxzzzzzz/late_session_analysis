@@ -3,7 +3,7 @@
 数据源: np-anotice-stock.eastmoney.com
 用途: L3阶段检测个股近3日是否有重大利空公告 (has_bad_news)
 
-API 限流: 每请求间隔 ≥ 0.5s，批量查询时总耗时 ~ N*0.5s
+东财请求统一走 rate_limiter.em_get() 门控 (QPS≤1)。
 """
 import logging
 import time
@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import requests
+
+from data_provider.rate_limiter import em_get
 
 logger = logging.getLogger(__name__)
 
@@ -33,21 +35,13 @@ class NewsFetcher:
     """个股公告/新闻数据获取器
 
     直接调用东方财富公告API (非akshare)，返回结构化JSON数据。
+    限流由 rate_limiter.em_get() 统一门控 (QPS≤1)。
     """
 
     BASE_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
-    REQUEST_INTERVAL = 0.5  # API限流间隔 (秒)
-    _last_request_time: float = 0.0
 
     def __init__(self, lookback_days: int = 3):
         self.lookback_days = lookback_days
-
-    def _rate_limit(self):
-        """API 限流控制"""
-        elapsed = time.time() - self._last_request_time
-        if elapsed < self.REQUEST_INTERVAL:
-            time.sleep(self.REQUEST_INTERVAL - elapsed)
-        self._last_request_time = time.time()
 
     def fetch_announcements(self, code: str, max_items: int = 30) -> list[dict]:
         """获取个股公告列表
@@ -59,8 +53,6 @@ class NewsFetcher:
         Returns:
             公告列表，每项含 title, notice_date, announcement_type 等字段
         """
-        self._rate_limit()
-
         params = {
             'page_size': max_items,
             'page_index': 1,
@@ -71,7 +63,7 @@ class NewsFetcher:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/117.0.0.0'}
 
         try:
-            r = requests.get(self.BASE_URL, params=params, headers=headers, timeout=15)
+            r = em_get(self.BASE_URL, params=params, headers=headers, timeout=15)
             r.raise_for_status()
             data = r.json()
             if data.get('success') and data.get('data'):

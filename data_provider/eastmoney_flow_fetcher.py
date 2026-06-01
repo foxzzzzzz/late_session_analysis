@@ -8,6 +8,8 @@
   - mainForce (万元), retail (万元), super (万元), large (万元)
   - active_buy_ratio (%)
   - data_date: 当日日期
+
+东财请求统一走 rate_limiter.em_get() 门控 (QPS≤1)。
 """
 import time
 import random
@@ -15,6 +17,9 @@ import logging
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
+
+from data_provider.rate_limiter import em_get
+from data_provider.circuit_breaker import CircuitBreaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +47,7 @@ class EastmoneyFlowFetcher:
     def __init__(self, timeout: float = 10.0, max_workers: int = 3):
         self.timeout = timeout
         self.max_workers = max_workers
-        self._session = requests.Session()
-        self._session.headers.update(_EM_HEADERS)
+        self._breaker = CircuitBreaker("eastmoney_push2his", failure_threshold=3, cooldown_sec=300)
 
     def _to_secid(self, code: str) -> str:
         if code.startswith("6"):
@@ -76,6 +80,11 @@ class EastmoneyFlowFetcher:
             金额单位为万元（与百度原接口保持一致）
         """
         if not codes:
+            return {}
+
+        # 熔断检查: 如果已熔断则跳过
+        if self._breaker.is_open:
+            logger.warning("东方财富 push2his 已熔断，跳过资金流富化")
             return {}
 
         # 飞行前检查: 双通道都不可达则立即返回，避免浪费 8+ 分钟
@@ -145,12 +154,15 @@ class EastmoneyFlowFetcher:
 
     def _try_push2his(self, secid: str, code: str) -> Optional[dict]:
         """push2his 日K线资金流 — 今日数据"""
+        if self._breaker.is_open:
+            return None
+
         url = _HIS_API.format(secid=secid)
         last_error = None
 
         for attempt, backoff in enumerate(_RETRY_DELAYS):
             try:
-                r = self._session.get(url, timeout=self.timeout)
+                r = self._breaker.call(em_get, url, timeout=self.timeout)
                 d = r.json()
                 klines = (
                     d.get("data", {}).get("klines", [])
@@ -176,6 +188,8 @@ class EastmoneyFlowFetcher:
                     ),
                     "data_date": parts[0],  # 日期在kline第一列
                 }
+            except CircuitOpenError:
+                return None
             except Exception as e:
                 last_error = e
                 if attempt < len(_RETRY_DELAYS) - 1:

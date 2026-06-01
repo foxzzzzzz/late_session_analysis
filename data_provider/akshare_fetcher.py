@@ -3,12 +3,16 @@ import time
 import logging
 import pandas as pd
 from data_provider.base import BaseFetcher, RealtimeQuote
+from data_provider.circuit_breaker import CircuitBreaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
 
 
 class AkshareFetcher(BaseFetcher):
     """Akshare 数据源，efinance 不可用时的备选"""
+
+    def __init__(self):
+        self._breaker = CircuitBreaker("akshare", failure_threshold=2, cooldown_sec=300)
 
     @property
     def name(self) -> str:
@@ -19,6 +23,8 @@ class AkshareFetcher(BaseFetcher):
         return 3
 
     def is_available(self) -> bool:
+        if self._breaker.is_open:
+            return False
         try:
             import akshare as ak
             return hasattr(ak, 'stock_zh_a_spot_em')
@@ -26,10 +32,15 @@ class AkshareFetcher(BaseFetcher):
             return False
 
     def fetch_snapshot(self) -> list[RealtimeQuote]:
+        if self._breaker.is_open:
+            raise CircuitOpenError(f"[akshare] 熔断中，跳过")
+
         import akshare as ak
         t0 = time.time()
         try:
-            df = ak.stock_zh_a_spot_em()
+            df = self._breaker.call(ak.stock_zh_a_spot_em)
+        except CircuitOpenError:
+            raise
         except Exception as e:
             elapsed = time.time() - t0
             logger.error(f"akshare API调用失败 ({elapsed:.1f}s): {type(e).__name__}: {e}")

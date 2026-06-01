@@ -12,16 +12,18 @@ API: push2.eastmoney.com/api/qt/stock/fflow/kline/get
 字段映射: parts[4]=large(f55), parts[5]=super(f56) — 与 push2his 日线一致
 注意: 无 active_buy_ratio 字段 (f57 分钟线返回空，需从新浪获取)
 
-需要 urllib (非 requests)，东财对 push2 封禁 requests UA。
+东财请求统一走 rate_limiter.em_urlopen() 门控 (push2 需 urllib，QPS≤1)。
 """
 import json
 import logging
 import random
 import time
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Optional
+
+from data_provider.rate_limiter import em_urlopen
+from data_provider.circuit_breaker import CircuitBreaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ class EastmoneyMinuteFlowFetcher:
         self.max_workers = max_workers
         self._last_success: dict[str, dict] = {}
         self._stagger_range = (0.3, 0.6)
+        self._breaker = CircuitBreaker("eastmoney_push2", failure_threshold=3, cooldown_sec=300)
 
     def enrich_batch(self, codes: list[str]) -> dict[str, dict]:
         """批量获取分钟级资金流向
@@ -54,6 +57,10 @@ class EastmoneyMinuteFlowFetcher:
             无 active_buy_ratio 字段
         """
         if not codes:
+            return {}
+
+        if self._breaker.is_open:
+            logger.warning("东方财富 push2 已熔断，跳过分钟资金流富化")
             return {}
 
         unique_codes = list(dict.fromkeys([str(c).zfill(6) for c in codes]))
@@ -80,6 +87,9 @@ class EastmoneyMinuteFlowFetcher:
 
     def _fetch_one(self, code: str) -> Optional[dict]:
         """获取单只股票分钟级资金流"""
+        if self._breaker.is_open:
+            return None
+
         time.sleep(random.uniform(*self._stagger_range))
 
         secid = _to_secid(code)
@@ -88,11 +98,14 @@ class EastmoneyMinuteFlowFetcher:
         last_error = None
         for attempt, backoff in enumerate(_RETRY_DELAYS):
             try:
-                req = urllib.request.Request(url)
-                req.add_header("User-Agent", _UA)
-                req.add_header("Referer", "https://data.eastmoney.com/")
-                resp = urllib.request.urlopen(req, timeout=self.timeout)
+                headers = {
+                    "User-Agent": _UA,
+                    "Referer": "https://data.eastmoney.com/",
+                }
+                resp = self._breaker.call(em_urlopen, url, timeout=self.timeout, headers=headers)
                 raw = json.loads(resp.read().decode("utf-8"))
+            except CircuitOpenError:
+                return None
             except Exception as e:
                 last_error = e
                 if attempt < len(_RETRY_DELAYS) - 1:

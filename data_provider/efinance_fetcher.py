@@ -3,12 +3,16 @@ import time
 import logging
 import pandas as pd
 from data_provider.base import BaseFetcher, RealtimeQuote
+from data_provider.circuit_breaker import CircuitBreaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
 
 
 class EfinanceFetcher(BaseFetcher):
     """东方财富数据源 (efinance)，优先级最高"""
+
+    def __init__(self):
+        self._breaker = CircuitBreaker("efinance", failure_threshold=3, cooldown_sec=300)
 
     @property
     def name(self) -> str:
@@ -19,6 +23,8 @@ class EfinanceFetcher(BaseFetcher):
         return 2
 
     def is_available(self) -> bool:
+        if self._breaker.is_open:
+            return False
         try:
             import efinance as ef
             return hasattr(ef, 'stock')
@@ -26,10 +32,15 @@ class EfinanceFetcher(BaseFetcher):
             return False
 
     def fetch_snapshot(self) -> list[RealtimeQuote]:
+        if self._breaker.is_open:
+            raise CircuitOpenError(f"[efinance] 熔断中，跳过")
+
         import efinance as ef
         t0 = time.time()
         try:
-            df = ef.stock.get_realtime_quotes()
+            df = self._breaker.call(ef.stock.get_realtime_quotes)
+        except CircuitOpenError:
+            raise
         except Exception as e:
             elapsed = time.time() - t0
             logger.error(f"efinance API调用失败 ({elapsed:.1f}s): {type(e).__name__}: {e}")
