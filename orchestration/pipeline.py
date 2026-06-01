@@ -199,6 +199,23 @@ class LateSessionPipeline:
         if self.preloader and not self.preloader.is_loaded():
             self.preloader.load_all()
 
+        # 市场状态重新判定 (preloader加载后有了行业数据，可计算市场宽度因子)
+        if self.preloader and self.preloader.sector_performance:
+            new_regime = self.config.resolve_regime(
+                sector_performance=self.preloader.sector_performance
+            )
+            if new_regime != self.regime:
+                logger.info(
+                    f"市场状态更新: {self.regime} → {new_regime} (加入市场宽度因子后)"
+                )
+                self.regime = new_regime
+                screening_configs = self.config.get_screening_configs(self.regime)
+                self.funnel = FunnelPipeline(
+                    config=FunnelConfig(**screening_configs),
+                    preloader=self.preloader,
+                    cache=self.cache,
+                )
+
         # 题材热度分析 (基于预加载的热点数据)
         if self.preloader and self.preloader.hot_concepts:
             self.concept_analyzer.analyze(self.preloader.hot_concepts)
@@ -573,7 +590,14 @@ class LateSessionPipeline:
 
         from data_provider.sector_filter import SectorFilter
         sf = SectorFilter(self.preloader, self.config)
-        codes, sector_map = sf.filter()
+
+        # 熊市扩展候选池: 动态选取涨幅top-10行业 (vs 中性/牛市固定5个)
+        max_sectors = None
+        if self.regime == "bear":
+            max_sectors = getattr(self.config, 's0_sector_count_bear', 10)
+            logger.info(f"S0 熊市模式: 行业扩展至 top-{max_sectors}")
+
+        codes, sector_map = sf.filter(max_sectors=max_sectors)
         self._s0_sector_map = sector_map
 
         self.funnel.stats['s0_count'] = len(codes)

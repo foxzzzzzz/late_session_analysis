@@ -77,23 +77,39 @@ class SectorFilter:
         self.stock_sector_map: dict[str, str] = {}
         self._baostock_cache: Optional[dict] = None
 
-    def filter(self) -> tuple[list[str], dict[str, str]]:
+    def filter(self, max_sectors: int = None) -> tuple[list[str], dict[str, str]]:
         """执行 S0 预筛选
 
         从 .env TARGET_SECTORS 读取目标板块 → 匹配成分股 → 合并去重
 
+        Args:
+            max_sectors: 限制板块数 (熊市扩展用)。若设置且preloader有行业表现数据,
+                         则按涨幅取top-N行业, 忽略.env固定配置。
         Returns:
             (候选股票代码列表, 股票代码→板块名称映射)
         """
         t0 = time.time()
 
-        # 1. 从.env读取目标板块
-        sectors = self.config.target_sectors if self.config else []
+        # 1. 确定目标板块
+        if max_sectors and self.preloader and self.preloader.sector_performance:
+            # 动态选取: 按行业涨幅排名取 top-N
+            ranked = sorted(
+                self.preloader.sector_performance.items(),
+                key=lambda x: x[1], reverse=True,
+            )
+            sectors = [name for name, _ in ranked[:max_sectors]]
+            logger.info(
+                f"S0 动态板块 (top-{max_sectors} 涨幅): {sectors[:5]}..."
+            )
+        else:
+            sectors = self.config.target_sectors if self.config else []
+
         if not sectors:
-            logger.error("S0: .env 未配置 TARGET_SECTORS，无法预筛选")
+            logger.error("S0: 未配置 TARGET_SECTORS，无法预筛选")
             return [], {}
 
-        logger.info(f"S0 目标板块 ({len(sectors)}个): {sectors}")
+        logger.info(f"S0 目标板块 ({len(sectors)}个): {sectors[:5]}..."
+                     if len(sectors) > 5 else f"S0 目标板块 ({len(sectors)}个): {sectors}")
 
         # 2. baostock 缓存匹配 (主力，必有)
         cache_stocks = self._get_stocks_from_cache(sectors)

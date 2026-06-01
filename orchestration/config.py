@@ -134,6 +134,7 @@ class SystemConfig:
     s0_top_n: int = 3
     s0_max_n: int = 5
     s0_min_stocks: int = 200
+    s0_sector_count_bear: int = 10   # 熊市扩展: 动态选取top-10涨幅行业
 
     # === S1 K线形态预筛选 ===
     kline_min_atr_pct: float = 2.0         # ATR/Close 最低(%)
@@ -360,7 +361,8 @@ class SystemConfig:
                 "l4_medium_threshold": 52.0,
             },
             "bear": {
-                # K-line: 收紧波动/涨幅限制
+                # K-line: 收紧波动/涨幅限制, 但阳线占比放宽 (市场连跌时4天1阳即可)
+                "kline_min_yang_ratio_4d": 0.25,
                 "kline_max_atr_pct": 7.0,
                 "kline_max_up_in_9days": 5,
                 "kline_max_single_day_pct": 5.5,
@@ -391,11 +393,12 @@ class SystemConfig:
                 return override
         return getattr(self, attr)
 
-    def resolve_regime(self, force: str = None) -> str:
+    def resolve_regime(self, force: str = None, sector_performance: dict = None) -> str:
         """解析当前应使用的市场状态
 
         Args:
             force: 手动指定值 (bull/bear/neutral), 覆盖自动判定
+            sector_performance: {行业名: 涨跌幅%} 用于市场宽度因子
         Returns:
             "bull" | "bear" | "neutral"
         """
@@ -404,7 +407,7 @@ class SystemConfig:
         if self.regime_mode != "auto":
             return self.regime_mode
         from screening.market_regime import determine_regime
-        return determine_regime()
+        return determine_regime(sector_performance=sector_performance)
 
     def need_llm(self) -> bool:
         """是否配置了LLM"""

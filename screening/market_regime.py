@@ -60,12 +60,20 @@ def _fetch_sh_index() -> Optional[pd.DataFrame]:
     return None
 
 
-def determine_regime(index_df: Optional[pd.DataFrame] = None) -> str:
+def determine_regime(
+    index_df: Optional[pd.DataFrame] = None,
+    sector_performance: Optional[dict[str, float]] = None,
+) -> str:
     """判定当前市场状态: bull / bear / neutral
+
+    三因子投票 (范围 -3 ~ +3):
+      - 因子1: 上证20日收益率, >= +2% → +1, <= -2% → -1
+      - 因子2: 上证 vs MA20, above → +1, below → -1
+      - 因子3: 行业涨跌比 (上涨行业数 / 下跌行业数), >= 1.5 → +1, <= 0.67 → -1
 
     Args:
         index_df: 上证指数日线DataFrame (mootdx格式, 含close列, 按时间升序)
-                  如果为None则自动拉取
+        sector_performance: {行业名: 涨跌幅%} 同花顺90行业数据, 用于市场宽度因子
     Returns:
         "bull" | "bear" | "neutral"
     """
@@ -83,21 +91,59 @@ def determine_regime(index_df: Optional[pd.DataFrame] = None) -> str:
 
     # 因子1: 20日收益率
     ret_20d = (close.iloc[-1] - close.iloc[-21]) / close.iloc[-21] * 100
+    ret_5d = (close.iloc[-1] - close.iloc[-6]) / close.iloc[-6] * 100
 
-    # 因子2: vs MA20
+    # 因子2: vs MA20 (滞后指标, 短期动量改善时压制bear投票)
     ma20 = close.iloc[-20:].mean()
     above_ma20 = close.iloc[-1] > ma20
 
+    # 因子3: 行业涨跌比 (市场宽度)
+    breadth_up = breadth_down = 0
+    if sector_performance:
+        for pct in sector_performance.values():
+            if pct > 0:
+                breadth_up += 1
+            elif pct < 0:
+                breadth_down += 1
+
     bull_score = 0
+    details = []
+
     if ret_20d >= 2:
         bull_score += 1
+        details.append(f"20日{ret_20d:+.1f}%→bull")
     elif ret_20d <= -2:
         bull_score -= 1
+        details.append(f"20日{ret_20d:+.1f}%→bear")
+    else:
+        details.append(f"20日{ret_20d:+.1f}%→neutral")
 
     if above_ma20:
         bull_score += 1
+        details.append(f"MA20(above)→bull")
+    elif ret_5d >= 1.0:
+        # MA20 below 但短期动量已修复 — MA20只是滞后，不投bear
+        details.append(f"MA20(below但5日{ret_5d:+.1f}%修复)→neutral")
     else:
         bull_score -= 1
+        details.append(f"MA20(below)+5日{ret_5d:+.1f}%→bear")
+
+    if sector_performance:
+        total = breadth_up + breadth_down
+        if total > 0:
+            up_ratio = breadth_up / total
+            if up_ratio >= 0.60:       # ≥60%行业上涨 → 市场宽度偏牛
+                bull_score += 1
+                details.append(f"行业宽度{up_ratio:.0%}({breadth_up}/{breadth_down})→bull")
+            elif up_ratio <= 0.40:     # ≤40%行业上涨 → 市场宽度偏熊
+                bull_score -= 1
+                details.append(f"行业宽度{up_ratio:.0%}({breadth_up}/{breadth_down})→bear")
+            else:
+                details.append(f"行业宽度{up_ratio:.0%}({breadth_up}/{breadth_down})→neutral")
+        else:
+            details.append("行业涨跌(无数据)")
+    else:
+        details.append("行业涨跌(无数据)")
 
     if bull_score > 0:
         today_regime = "bull"
@@ -110,9 +156,9 @@ def determine_regime(index_df: Optional[pd.DataFrame] = None) -> str:
     final_regime = _debounce(today_regime)
 
     logger.info(
-        f"市场状态: {final_regime} "
-        f"(上证20日={ret_20d:+.1f}%, MA20={'above' if above_ma20 else 'below'}"
-        f"{', 防抖维持' if final_regime != today_regime else ''})"
+        f"市场状态: {final_regime} (score={bull_score:+d}) "
+        f"[{', '.join(details)}]"
+        f"{', 防抖维持' if final_regime != today_regime else ''}"
     )
 
     return final_regime
