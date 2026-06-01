@@ -360,19 +360,20 @@ class SystemConfig:
                 "l4_medium_threshold": 52.0,
             },
             "bear": {
-                # K-line: 收紧波动/涨幅限制, 但不收紧阳线占比
+                # K-line: 收紧波动/涨幅限制
                 "kline_max_atr_pct": 7.0,
                 "kline_max_up_in_9days": 5,
                 "kline_max_single_day_pct": 5.5,
                 "kline_max_atr_multiple": 1.5,
-                # L2: 需要更显著的量价确认
-                "l2_volume_ratio": 1.3,
-                "l2_last5min_vol_pct": 6.0,
-                "l2_late_rally_pct": 2.5,
+                # L2: 熊市也需要足够的候选量，避免最低保障每轮触发
+                "l2_volume_ratio": 1.2,
+                "l2_last5min_vol_pct": 4.5,
+                "l2_late_rally_pct": 1.0,
+                "l2_active_buy_pct": 50.0,
+                "l2_late_active_buy_ratio_min": 50.0,
+                "l2_big_order_ratio_mult": 1.3,
                 "l2_recovery_drop": 3.5,
                 "l2_recovery_rise": 2.0,
-                "l2_late_active_buy_ratio_min": 50.0,
-                "l2_big_order_ratio_mult": 1.5,
                 # L3: 收紧波动和量比, 提高胜率要求
                 "l3_max_volatility": 0.55,
                 "l3_vol_ratio_min": 1.2,

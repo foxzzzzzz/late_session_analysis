@@ -611,6 +611,30 @@ class LateSessionPipeline:
         self.tracker.stage_end("S1_K线扫描", len(contexts))
         return contexts
 
+    @staticmethod
+    def _strip_incomplete_5min_bar(df):
+        """丢弃当前未完成的5分钟bar，避免空bar拉低尾盘指标"""
+        import pandas as pd
+        from datetime import datetime
+
+        if df is None or df.empty:
+            return df
+
+        for col in ("datetime", "time"):
+            if col in df.columns:
+                times = pd.to_datetime(df[col])
+                break
+        else:
+            return df
+
+        now = datetime.now()
+        current_window = now.replace(second=0, microsecond=0)
+        current_window = current_window.replace(minute=current_window.minute // 5 * 5)
+
+        if times.iloc[-1] >= current_window:
+            return df.iloc[:-1]
+        return df
+
     # ============================================================
     # S2: 尾盘异常 + 资金流向 (每1分钟循环, 14:50-14:55)
     # ============================================================
@@ -636,7 +660,9 @@ class LateSessionPipeline:
                 min5_cache = self._kline_provider.load_5min_batch(codes, bars=48)
                 for code, df in min5_cache.items():
                     if not df.empty:
-                        self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
+                        df = self._strip_incomplete_5min_bar(df)
+                        if not df.empty:
+                            self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
                 logger.info(f"5分钟线指标计算完成: {len(self._5min_metrics)} 只")
 
             # 一次性应用所有富化数据 (日线 + 5分钟尾盘指标 + 板块 + 题材)
@@ -893,7 +919,9 @@ class LateSessionPipeline:
             min5_cache = self._kline_provider.load_5min_batch(codes, bars=48)
             for code, df in min5_cache.items():
                 if not df.empty:
-                    self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
+                    df = self._strip_incomplete_5min_bar(df)
+                    if not df.empty:
+                        self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
 
         # 资金流向刷新 (S2缓存已过~20分钟, 累积数据有增量)
         if self._flow_minute or self._flow_sina or self._flow_push2his:
@@ -970,7 +998,9 @@ class LateSessionPipeline:
                 min5_cache = self._kline_provider.load_5min_batch(codes, bars=48)
                 for code, df in min5_cache.items():
                     if not df.empty:
-                        self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
+                        df = self._strip_incomplete_5min_bar(df)
+                        if not df.empty:
+                            self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
 
             # Context富化 + 龙头效应
             self._enrich_contexts(l3_passed)

@@ -80,8 +80,7 @@ def screen_l2_anomaly(
 
     logger.info(f"L2 异动: {len(contexts)} → {len(passed)} "
                 f"({len(passed) / max(len(contexts), 1) * 100:.1f}%)")
-    logger.info(f"L2 诊断: 量比失败={diag.get('vol_ratio_fail', 0)}, "
-                f"尾盘量失败={diag.get('last5min_fail', 0)}, "
+    logger.info(f"L2 诊断: 量失败={diag.get('vol_fail', 0)}, "
                 f"价失败={diag['price_fail']}, "
                 f"资金失败={diag['capital_fail']} | "
                 f"量通过={diag['vol_pass']}, 价通过={diag['price_pass']}, 资金通过={diag['capital_pass']}")
@@ -125,10 +124,7 @@ def _check_l2(ctx, cfg: L2Config, has_depth: bool, has_capital: bool) -> tuple[b
         vol_ok = True
 
     if not vol_ok and cfg.require_volume:
-        if not vol_ratio_ok:
-            failures.append("vol_ratio_fail")
-        if not last5min_ok:
-            failures.append("last5min_fail")
+        failures.append("vol_fail")
         return False, failures
 
     # 2. 价格形态 (至少满足一项)

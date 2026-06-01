@@ -36,6 +36,11 @@ python main.py --test --stages 0,1        # S0板块预筛选 + S1 K线扫描
 python main.py --test --stages 0,1,2      # + S2尾盘异常
 python main.py --test --stages 0,1,2,3,4  # 完整5阶段
 
+# 11. 强制市场状态 (默认 auto 自动判定)
+python main.py --test --regime bull    # 强制牛市阈值
+python main.py --test --regime bear    # 强制熊市阈值
+python main_backtest.py --regime bull  # 回测强制牛市阈值
+
 # 9. 资金流向数据源独立测试 (开盘后任何时间可测)
 python tools/test_fund_flow.py                     # 默认5只
 python tools/test_fund_flow.py --codes 600519,000858  # 指定股票
@@ -185,6 +190,18 @@ S4 融合评分 (~14:57, 单次执行)
 | ❌ | ✅ | 72 | 62 | 48 |
 | ❌ | ❌ | 65 | 55 | 40
 
+## 牛熊市双阈值系统
+
+14:25 管线启动时自动判定市场状态（上证 20 日收益率 ±2% + MA20 位置，双因子投票），根据判定结果自动切换筛选阈值。支持 `--regime bull|bear|neutral|auto` 手动覆盖。
+
+```
+牛市(bull): 候选充足 → 收紧 K线阳线占比/连涨天数挑强股，放宽 L2量价门槛
+熊市(bear): 量+价信号稀缺 → K线收紧波动/涨幅限制，L2量价与中性对齐
+中性(neutral): 当前代码默认值，已经过实盘验证
+```
+
+> 完整参数表见 `doc/market_regime_dual_threshold.md`
+
 ## 配置 (`.env`)
 
 ### 数据源
@@ -219,7 +236,7 @@ S4 融合评分 (~14:57, 单次执行)
 | `KLINE_MAX_CONSECUTIVE_UP` | 最大连涨天数 | `5` |
 | `KLINE_MAX_UP_IN_9DAYS` | 近9天最多涨几天 | `6` |
 | `KLINE_MAX_SINGLE_DAY_PCT` | 单日涨幅上限% | `6.5` |
-| `KLINE_MIN_YANG_RATIO_4D` | 近4天阳线占比最低 | `0.75` (3/4) |
+| `KLINE_MIN_YANG_RATIO_4D` | 近4天阳线占比最低 | `0.50` (2/4) |
 | `KLINE_MIN_CONSECUTIVE_CLOSE_RISE` | 至少连续N天收盘上涨 (滑动窗口扫描) | `3` |
 | `KLINE_MIN_CLOSE_RISE_PCT` | 连续上涨每天最低涨幅% | `0.3` |
 | `KLINE_MAX_ATR_MULTIPLE` | 单日涨幅 ≤ N倍ATR | `2.0` |
@@ -370,22 +387,23 @@ S4 融合评分 (~14:57, 单次执行)
 
 **L2 尾盘异动**
 
+> 回测默认对齐实盘阈值，可通过 `BT_L2_*` 环境变量独立覆盖。
+
 | 变量 | 说明 | 默认值 | 实盘默认值 |
 |------|------|--------|-----------|
-| `BT_L2_VOLUME_RATIO` | 下午/上午量比 | `1.5` | 1.5 |
-| `BT_L2_LAST5MIN_VOL_PCT` | 最后5分钟量占比% | `6.0` | 8.0 |
-| `BT_L2_LATE_RALLY_PCT` | 尾盘拉升% | `1.5` | 3.0 |
-| `BT_L2_RECOVERY_DROP` | 企稳跌幅% | `2.0` | 3.0 |
-| `BT_L2_RECOVERY_RISE` | 企稳回升% | `1.0` | 1.5 |
-| `BT_L2_ACTIVE_BUY_PCT` | 主动买入占比% | `50.0` | 55.0 |
+| `BT_L2_VOLUME_RATIO` | 尾盘量比 | `1.2` | 1.2 |
+| `BT_L2_LAST5MIN_VOL_PCT` | 最后5分钟量占比% | `5.0` | 5.0 |
+| `BT_L2_LATE_RALLY_PCT` | 尾盘拉升% | `2.0` | 2.0 |
+| `BT_L2_RECOVERY_DROP` | 企稳跌幅% | `3.0` | 3.0 |
+| `BT_L2_RECOVERY_RISE` | 企稳回升% | `1.5` | 1.5 |
+| `BT_L2_ACTIVE_BUY_PCT` | 主动买入占比% | `55.0` | 55.0 |
 | `BT_L2_MIN_PASS` | L2 最低通过数，不足时放宽资金条件 | `10` | 10 |
 
 > 回测硬编码 `require_capital=False`（资金流数据不可用），`BT_L2_MIN_PASS` 最低保障机制已内置但通常不触发。
 
 **K线形态 (S1)**
 
-> 回测默认比实盘宽松：阳线占比/收盘动量在实盘中通过多次循环扫描可捕获更多候选，
-> 回测仅单次收盘快照，需调低。可通过 `BT_KLINE_*` 独立覆盖。
+> 回测默认对齐实盘阈值，可通过 `BT_KLINE_*` 独立覆盖。牛熊市双阈值系统会在此基础上自动调整。
 
 | 变量 | 说明 | 回测默认 | 实盘默认 |
 |------|------|----------|----------|
@@ -394,9 +412,9 @@ S4 融合评分 (~14:57, 单次执行)
 | `BT_KLINE_MAX_CONSECUTIVE_UP` | 最大连涨天数 | `5` | 5 |
 | `BT_KLINE_MAX_UP_IN_9DAYS` | 近9天最多涨几天 | `6` | 6 |
 | `BT_KLINE_MAX_SINGLE_DAY_PCT` | 单日涨幅上限% | `6.5` | 6.5 |
-| `BT_KLINE_MIN_YANG_RATIO_4D` | 近4天阳线占比最低 | `0.25` | 0.75 |
-| `BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE` | 至少连续N天收盘上涨 | `0` (禁用) | 4 |
-| `BT_KLINE_MIN_CLOSE_RISE_PCT` | 连续上涨每天最低涨幅% | `0.0` (禁用) | 0.5 |
+| `BT_KLINE_MIN_YANG_RATIO_4D` | 近4天阳线占比最低 | `0.50` | 0.50 |
+| `BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE` | 至少连续N天收盘上涨 | `3` | 3 |
+| `BT_KLINE_MIN_CLOSE_RISE_PCT` | 连续上涨每天最低涨幅% | `0.3` | 0.3 |
 
 **L4 推荐阈值**
 
@@ -476,6 +494,7 @@ python main_backtest.py -v
 | `--sectors` | 覆盖 TARGET_SECTORS (逗号分隔) | `.env` 配置 |
 | `--max-positions` | 每日最大持仓数 | 5 |
 | `--slippage` | 滑点 (bps) | 5.0 |
+| `--regime` | 市场状态: `auto` / `bull` / `bear` / `neutral` | `auto` |
 | `-v` | DEBUG 详细日志 | false |
 
 ### 回测报告
