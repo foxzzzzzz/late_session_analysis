@@ -50,7 +50,7 @@ def _fetch_sh_index() -> Optional[pd.DataFrame]:
     try:
         from mootdx.quotes import Quotes
         client = Quotes.factory(market="std")
-        df = client.bars(symbol="999999", frequency=9, offset=50)
+        df = client.index(symbol="999999", category=4, offset=50)
         if df is not None and not df.empty:
             return df
     except ImportError:
