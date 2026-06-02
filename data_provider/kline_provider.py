@@ -470,12 +470,16 @@ class KlineProvider:
         pre_late_vol = float(df.loc[pre_late_mask, vol_col].sum()) if pre_late_mask.any() else 0.0
         late_vol = float(df.loc[late_mask, vol_col].sum()) if late_mask.any() else 0.0
         total_vol = float(df[vol_col].sum())
-        # 尾盘量比: (尾盘每bar成交额) / (尾盘前每bar成交额) — 时间归一化
-        late_bars = late_mask.sum()
         pre_late_bars = max(pre_late_mask.sum(), 1)
-        late_rate = late_vol / max(late_bars, 1)
-        pre_late_rate = pre_late_vol / pre_late_bars
-        late_volume_ratio = late_rate / max(pre_late_rate, 1.0)
+        pre_late_rate = pre_late_vol / pre_late_bars  # 13:00-14:30 每bar均量 (固定基线)
+
+        # 尾盘量比: 最新完成bar / 午后前半段每bar均量 (与last_5min_volume_pct对称：固定窗口 + 稳定分母)
+        late_bars = late_mask.sum()
+        if late_bars >= 1:
+            latest_late_bar_vol = float(df.loc[late_mask].iloc[-1][vol_col])  # 最新尾盘bar
+        else:
+            latest_late_bar_vol = 0.0
+        late_volume_ratio = latest_late_bar_vol / max(pre_late_rate, 1.0)
 
         # 14:30 价格
         bar_1430 = df[(df["_t"].dt.hour == 14) & (df["_t"].dt.minute == 30)]

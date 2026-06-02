@@ -102,7 +102,22 @@ class SectorFilter:
                 f"S0 动态板块 (top-{max_sectors} 涨幅): {sectors[:5]}..."
             )
         else:
+            if max_sectors:
+                reason = (
+                    f"preloader={self.preloader is not None}, "
+                    f"perf_empty={not self.preloader.sector_performance if self.preloader else 'N/A'}"
+                )
+                logger.warning(f"S0 动态板块跳过 (max_sectors={max_sectors}, {reason}), 回退固定板块")
             sectors = self.config.target_sectors if self.config else []
+
+            # 熊市扩展回退: 当 sector_performance 为空时，用所有关键词板块替代固定5板块
+            if max_sectors and sectors:
+                all_sectors = list(dict.fromkeys(kw for kw, _ in _ENV_TO_CSRC_KEYWORDS))
+                sectors = all_sectors
+                logger.warning(
+                    f"S0 熊市回退: 因缺少行业行情数据，扩展至全部 {len(sectors)} 个关键词板块 "
+                    f"(规避固定板块候选不足问题)"
+                )
 
         if not sectors:
             logger.error("S0: 未配置 TARGET_SECTORS，无法预筛选")
@@ -115,7 +130,14 @@ class SectorFilter:
         cache_stocks = self._get_stocks_from_cache(sectors)
 
         # 3. akshare 成分股API (补充，成功则合并)
-        akshare_stocks = self._get_constituent_stocks_via_akshare(sectors)
+        # 当baostock已返回足够股票时跳过，避免交易时段API拥堵
+        if len(cache_stocks) >= self.min_stocks:
+            akshare_stocks = []
+            logger.debug(
+                f"S0 跳过akshare补充 (baostock已有{len(cache_stocks)}只 >= {self.min_stocks})"
+            )
+        else:
+            akshare_stocks = self._get_constituent_stocks_via_akshare(sectors)
 
         # 4. 合并去重
         merged: dict[str, str] = {}

@@ -670,10 +670,18 @@ class LateSessionPipeline:
         loop_interval = self.config.s2_loop_interval
         iteration = 0
         codes = [c.code for c in contexts]
+        last_round = self.test_mode
 
         while True:
             iteration += 1
-            logger.info(f"S2 第{iteration}轮扫描...")
+
+            if iteration > 1:
+                last_round = not self._time_window_active(self.config.s2_window_end)
+
+            if last_round:
+                logger.info(f"S2 第{iteration}轮扫描 (最终轮)...")
+            else:
+                logger.info(f"S2 第{iteration}轮扫描...")
 
             # 刷新量价数据
             contexts = self._fetch_and_convert(codes)
@@ -692,8 +700,8 @@ class LateSessionPipeline:
             # 一次性应用所有富化数据 (日线 + 5分钟尾盘指标 + 板块 + 题材)
             self._enrich_contexts(contexts)
 
-            # 资金流向 — 首轮 + 每5分钟刷新 (累积数据有增量)
-            if iteration == 1 or iteration % 5 == 0:
+            # 资金流向 — 首轮 + 每2分钟刷新 (提高Sina差分覆盖率)
+            if iteration == 1 or iteration % 2 == 0:
                 if self._flow_minute or self._flow_sina or self._flow_push2his:
                     self._fund_flow_fetched = False
                     self._enrich_fund_flow(contexts)
@@ -709,6 +717,7 @@ class LateSessionPipeline:
                 l2_candidates, self.funnel.config.l2,
                 has_depth_data=False,
                 has_capital_data=has_capital,
+                last_round=last_round,
             )
 
             # 最低保障: 通过数不足 min_pass 时，放宽资金条件重筛
@@ -725,6 +734,7 @@ class LateSessionPipeline:
                     l2_candidates, relaxed,
                     has_depth_data=False,
                     has_capital_data=False,
+                    last_round=last_round,
                 )
                 logger.info(f"L2 放宽后: {len(contexts)} 只通过")
                 self._log_low_count(contexts, "S2 L2(放宽)")
@@ -739,6 +749,9 @@ class LateSessionPipeline:
 
             if not contexts:
                 logger.info("S2 候选池清空，提前结束循环")
+                break
+
+            if last_round:
                 break
 
             if not self._sleep_or_break(self.config.s2_window_end, loop_interval):
@@ -758,6 +771,8 @@ class LateSessionPipeline:
         """
         if self._fund_flow_fetched:
             return
+
+        self._sina_delta_cache: dict[str, float] = {}  # 每轮清空，仅保留本次delta
 
         l2_candidates = list(contexts)
         enrich_limit = self.config.max_capital_enrich
@@ -824,25 +839,29 @@ class LateSessionPipeline:
                 "data_date": sd.get("data_date") or hd.get("data_date") or md.get("data_date", ""),
             }
 
-        # Sina双时间点差分: 首轮保存基线, 后续轮次计算尾盘实时 active_buy_ratio
-        is_first_sina = not self._sina_baseline and sina_data
-        if is_first_sina:
+        # Sina双时间点差分: 每次刷新后计算最近区间增量并更新基线 (滚动基线，不累积)
+        if sina_data:
             for code, sd in sina_data.items():
                 r0_in = sd.get("r0_in", 0)
                 r0_out = sd.get("r0_out", 0)
-                if r0_in > 0 or r0_out > 0:
-                    self._sina_baseline[code] = {"r0_in": r0_in, "r0_out": r0_out}
+                if r0_in <= 0 and r0_out <= 0:
+                    continue
+                if code in self._sina_baseline:
+                    bl = self._sina_baseline[code]
+                    delta_in = r0_in - bl["r0_in"]
+                    delta_out = r0_out - bl["r0_out"]
+                    delta_total = delta_in + delta_out
+                    if delta_total > 0:
+                        # 存入临时字典，后续 enrich 时写入 ctx
+                        if not hasattr(self, '_sina_delta_cache'):
+                            self._sina_delta_cache: dict[str, float] = {}
+                        self._sina_delta_cache[code] = delta_in / delta_total * 100
+                # 滚动基线: 每次刷新后更新
+                self._sina_baseline[code] = {"r0_in": r0_in, "r0_out": r0_out}
             logger.info(
-                f"Sina基线: 已保存 {len(self._sina_baseline)} 只股票的 r0_in/r0_out 快照"
+                f"Sina滚动基线: {len(self._sina_baseline)} 只 (本次delta有效: "
+                f"{len(getattr(self, '_sina_delta_cache', {}))} 只)"
             )
-        elif self._sina_baseline and sina_data:
-            # 后续轮次: 新出现的股票也保存基线
-            for code, sd in sina_data.items():
-                if code not in self._sina_baseline:
-                    r0_in = sd.get("r0_in", 0)
-                    r0_out = sd.get("r0_out", 0)
-                    if r0_in > 0 or r0_out > 0:
-                        self._sina_baseline[code] = {"r0_in": r0_in, "r0_out": r0_out}
 
         today_count = 0
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -883,16 +902,10 @@ class LateSessionPipeline:
             ab_source = sd or hd
             ctx.active_buy_ratio = ab_source.get("active_buy_ratio", 50.0)
 
-            # 尾盘实时 active_buy_ratio: Sina双时间点差分
-            if sd and ctx.code in self._sina_baseline:
-                bl = self._sina_baseline[ctx.code]
-                r0_in_now = sd.get("r0_in", 0)
-                r0_out_now = sd.get("r0_out", 0)
-                delta_in = r0_in_now - bl["r0_in"]
-                delta_out = r0_out_now - bl["r0_out"]
-                delta_total = delta_in + delta_out
-                if delta_total > 0:
-                    ctx.late_active_buy_ratio = delta_in / delta_total * 100
+            # 尾盘实时 active_buy_ratio: Sina滚动基线差分 (最近区间增量)
+            delta_cache = getattr(self, '_sina_delta_cache', {})
+            if ctx.code in delta_cache:
+                ctx.late_active_buy_ratio = delta_cache[ctx.code]
 
             # 日期验证: 分钟线或新浪有当日日期即算有效
             dates = [d.get("data_date", "") for d in (md, sd, hd) if d]

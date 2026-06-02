@@ -49,21 +49,55 @@ class DataPreloader:
     # === 同花顺行业对比 (替代buggy akshare) ===
 
     def _load_sector_performance_ths(self):
-        """从同花顺拉取90行业板块涨跌排名"""
+        """从同花顺拉取90行业板块涨跌排名，带重试和回退"""
+        import akshare as ak
+        import time as _time
+
+        # 策略1: akshare 同花顺行业一览 (3次重试)
+        for attempt in range(3):
+            try:
+                df = ak.stock_board_industry_summary_ths()
+                if df is not None and not df.empty:
+                    for _, row in df.iterrows():
+                        name = str(row.get("板块", ""))
+                        pct = float(row.get("涨跌幅", 0))
+                        if name:
+                            self.sector_performance[name] = pct
+                    logger.info(
+                        f"同花顺行业对比: {len(self.sector_performance)} 个行业"
+                        + (f" (重试{attempt}次后成功)" if attempt > 0 else "")
+                    )
+                    return
+            except Exception as e:
+                if attempt < 2:
+                    _time.sleep(1.0 + attempt * 0.5)
+                    logger.debug(f"同花顺行业对比 重试{attempt+1}/3: {e}")
+                else:
+                    logger.warning(f"同花顺行业对比 akshare API 失败 (3次重试): {e}")
+
+        # 策略2: akshare 同花顺行业指数 (历史OHLCV → 取最新日期计算涨跌幅)
         try:
-            import akshare as ak
-            df = ak.stock_board_industry_summary_ths()
+            df = ak.stock_board_industry_index_ths()
             if df is not None and not df.empty:
-                for _, row in df.iterrows():
-                    name = str(row.get("板块", ""))
-                    pct = float(row.get("涨跌幅", 0))
-                    if name:
-                        self.sector_performance[name] = pct
-                logger.info(
-                    f"同花顺行业对比: {len(self.sector_performance)} 个行业"
-                )
+                latest_date = df["日期"].max()
+                recent = df[df["日期"] == latest_date]
+                if not recent.empty:
+                    # 需要计算涨跌幅: (close - pre_close) / pre_close
+                    # stock_board_industry_index_ths 只有 OHLCV，没有涨跌幅直接字段
+                    # 按板块名聚合，取最新日期的收盘/开盘比作为当日涨跌
+                    for _, row in recent.iterrows():
+                        name = str(row.get("名称", ""))
+                        close = float(row.get("收盘价", 0))
+                        open_ = float(row.get("开盘价", 0))
+                        if name and close > 0 and open_ > 0:
+                            pct = (close - open_) / open_ * 100
+                            self.sector_performance[name] = pct
+                    logger.info(
+                        f"同花顺行业对比 (指数回退): {len(self.sector_performance)} 个行业"
+                    )
+                    return
         except Exception as e:
-            logger.warning(f"同花顺行业对比加载失败: {e}")
+            logger.warning(f"同花顺行业对比 指数回退也失败: {e}")
 
     # === 限售解禁日历 ===
 

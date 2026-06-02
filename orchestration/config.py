@@ -361,8 +361,9 @@ class SystemConfig:
                 "l4_medium_threshold": 52.0,
             },
             "bear": {
-                # K-line: 收紧波动/涨幅限制, 但阳线占比放宽 (市场连跌时4天1阳即可)
+                # K-line: 收紧波动/涨幅限制, 放宽形态要求 (熊市信号稀缺)
                 "kline_min_yang_ratio_4d": 0.25,
+                "kline_min_consecutive_close_rise": 1,
                 "kline_max_atr_pct": 7.0,
                 "kline_max_up_in_9days": 5,
                 "kline_max_single_day_pct": 5.5,

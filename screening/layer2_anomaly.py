@@ -43,6 +43,7 @@ def screen_l2_anomaly(
     config: Optional[L2Config] = None,
     has_depth_data: bool = False,
     has_capital_data: bool = False,
+    last_round: bool = False,
 ) -> list:
     """L2 尾盘异动识别
 
@@ -55,6 +56,7 @@ def screen_l2_anomaly(
     # 诊断计数器 — 三个条件必须同时满足
     diag = {"vol_fail": 0, "price_fail": 0, "capital_fail": 0,
             "vol_pass": 0, "price_pass": 0, "capital_pass": 0}
+    detail_failures: list[str] = []  # 最终轮详细失败原因
     # 采样值分布
     vol_ratios = []
     last5_pcts = []
@@ -63,8 +65,17 @@ def screen_l2_anomaly(
     for ctx in contexts:
         ctx.l2_passed, fail_reason = _check_l2(ctx, config, has_depth_data, has_capital_data)
         if fail_reason:
-            for k in fail_reason:
-                diag[k] = diag.get(k, 0) + 1
+            for reason in fail_reason:
+                if reason.startswith("量:"):
+                    diag["vol_fail"] += 1
+                elif reason.startswith("价:"):
+                    diag["price_fail"] += 1
+                elif reason.startswith("资金:"):
+                    diag["capital_fail"] += 1
+            if last_round and fail_reason:
+                detail_failures.append(
+                    f"  {ctx.code} {ctx.name}(涨{ctx.late_price_change:+.1f}% 量比{ctx.late_volume_ratio:.2f}): {'; '.join(fail_reason)}"
+                )
         else:
             diag["vol_pass"] += 1
             diag["price_pass"] += 1
@@ -93,38 +104,49 @@ def screen_l2_anomaly(
         return [f"{clean[int(len(clean) * p / 100)]:.2f}" for p in pcts]
     if vol_ratios:
         p = _pctls(vol_ratios, [50, 75, 90, 95])
-        logger.info(f"L2 分布 量比(p50/p75/p90/p95): {p[0]}/{p[1]}/{p[2]}/{p[3]}")
+        logger.info(f"L2 分布 【量】量比(p50/p75/p90/p95): {p[0]}/{p[1]}/{p[2]}/{p[3]}")
         p = _pctls(last5_pcts, [50, 75, 90, 95])
-        logger.info(f"L2 分布 尾盘量占比: {p[0]}/{p[1]}/{p[2]}/{p[3]}")
+        logger.info(f"L2 分布 【量】尾盘量占比: {p[0]}/{p[1]}/{p[2]}/{p[3]}")
         p = _pctls([abs(v) for v in late_changes], [50, 75, 90, 95])
-        logger.info(f"L2 分布 尾盘涨幅|%|: {p[0]}/{p[1]}/{p[2]}/{p[3]}")
+        logger.info(f"L2 分布 【价】尾盘涨幅|%|: {p[0]}/{p[1]}/{p[2]}/{p[3]}")
     if active_buy_ratios:
         p = _pctls(active_buy_ratios, [25, 50, 75, 90])
-        logger.info(f"L2 分布 active_buy_ratio(p25/p50/p75/p90): {p[0]}/{p[1]}/{p[2]}/{p[3]}")
+        logger.info(f"L2 分布 【资金】active_buy_ratio(p25/p50/p75/p90): {p[0]}/{p[1]}/{p[2]}/{p[3]}")
     # 尾盘实时 active_buy_ratio (Sina差分, 仅首轮后有数据)
     late_ab = sorted([c.late_active_buy_ratio for c in contexts if c.late_active_buy_ratio > 0])
     if late_ab:
         n = len(late_ab)
         logger.info(
-            f"L2 分布 late_active_buy_ratio(Sina差分): n={n} "
+            f"L2 分布 【资金】late_active_buy_ratio(Sina差分): n={n} "
             f"p25={late_ab[n//4]:.1f} p50={late_ab[n//2]:.1f} p75={late_ab[n*3//4]:.1f}"
         )
+
+    # 最终轮: 输出所有失败股票的具体原因
+    if last_round and detail_failures:
+        logger.info(f"L2 最终轮失败详情 ({len(detail_failures)}只):")
+        for line in detail_failures:
+            logger.info(line)
+
     return passed
 
 
 def _check_l2(ctx, cfg: L2Config, has_depth: bool, has_capital: bool) -> tuple[bool, list[str]]:
-    """检查单只股票是否通过L2, 返回 (通过, 失败原因列表)"""
+    """检查单只股票是否通过L2, 返回 (通过, 失败原因列表)
+
+    失败原因粒度:
+      vol:  量比<阈值 / 尾盘占比<阈值
+      price: 拉升不足 / 企稳不满足 / 未破前高
+      capital: 大单净流出 / 大单比不足 / late买入比不足
+    """
     failures = []
 
     # 1. 尾盘放量 (必须满足其中一项)
-    vol_ok = False
     vol_ratio_ok = ctx.late_volume_ratio >= cfg.volume_ratio_min
     last5min_ok = ctx.last_5min_volume_pct >= cfg.last_5min_vol_pct_min
-    if vol_ratio_ok or last5min_ok:
-        vol_ok = True
+    vol_ok = vol_ratio_ok or last5min_ok
 
     if not vol_ok and cfg.require_volume:
-        failures.append("vol_fail")
+        failures.append(f"量:量比{ctx.late_volume_ratio:.2f}<{cfg.volume_ratio_min}&尾盘占比{ctx.last_5min_volume_pct:.1f}%<{cfg.last_5min_vol_pct_min}%")
         return False, failures
 
     # 2. 价格形态 (至少满足一项)
@@ -149,28 +171,30 @@ def _check_l2(ctx, cfg: L2Config, has_depth: bool, has_capital: bool) -> tuple[b
         ctx.anomaly_type = 'breakout'
 
     if not price_ok and cfg.require_price_pattern:
-        failures.append("price_fail")
+        reasons = []
+        if ctx.late_price_change < cfg.late_rally_min:
+            reasons.append(f"拉升{ctx.late_price_change:.2f}%<{cfg.late_rally_min}%")
+        if not ctx.broke_high:
+            reasons.append("未破前高")
+        failures.append("价:" + "&".join(reasons))
         return False, failures
 
     # 3. 资金流向 (有数据且要求检查时才查验)
     if has_capital and cfg.require_capital:
-        capital_ok = True
+        cap_fails = []
         if ctx.big_order_net < cfg.big_order_net_min:
-            capital_ok = False
+            cap_fails.append(f"大单净流入{ctx.big_order_net/10000:.0f}万<{cfg.big_order_net_min/10000:.0f}万")
         if ctx.daily_avg_big_order_ratio > 0:
             if ctx.big_order_ratio < ctx.daily_avg_big_order_ratio * cfg.big_order_ratio_mult:
-                capital_ok = False
-        # active_buy_ratio: 尾盘实时数据可用时用它 (更相关), 否则用全天累计
-        ab_ok = ctx.active_buy_ratio >= cfg.active_buy_ratio_min
+                cap_fails.append(f"大单比{ctx.big_order_ratio:.2%}<日均{ctx.daily_avg_big_order_ratio:.2%}×{cfg.big_order_ratio_mult}")
+        # 主动买入: 尾盘实时数据优先，无实时数据时不拦 (全天快照不含尾盘，可能误导)
         if ctx.late_active_buy_ratio > 0:
-            ab_ok = ab_ok or ctx.late_active_buy_ratio >= cfg.late_active_buy_ratio_min
-        if not ab_ok:
-            capital_ok = False
-        if not capital_ok:
-            failures.append("capital_fail")
+            if ctx.late_active_buy_ratio < cfg.late_active_buy_ratio_min:
+                cap_fails.append(f"late买入比{ctx.late_active_buy_ratio:.0f}%<{cfg.late_active_buy_ratio_min}%")
+        if cap_fails:
+            failures.append("资金:" + "&".join(cap_fails))
             return False, failures
     elif not has_capital:
-        # 无资金流向数据时不计入失败（pipeline 会通过最低保障机制处理）
         pass
 
     # 4. 盘口 (可选)

@@ -82,6 +82,7 @@ class Test5MinMetricsRefresh:
         """模拟3轮迭代, 验证每轮都调用了 load_5min_batch 和 compute_late_metrics"""
         from data_provider.kline_provider import KlineProvider
 
+        pipeline.test_mode = False  # 允许多轮迭代，由 _sleep_or_break 控制
         ctx = make_ctx("000001")
         pipeline._fetch_and_convert = MagicMock(return_value=[ctx])
         pipeline._enrich_fund_flow = MagicMock()
@@ -138,8 +139,9 @@ class Test5MinMetricsRefresh:
 class TestFundFlowFirstIteration:
     """验证资金流向只在首轮拉取"""
 
-    def test_fund_flow_only_first_iteration(self, pipeline):
-        """3轮迭代中, _enrich_fund_flow 仅在第1轮调用"""
+    def test_fund_flow_refresh_every_2nd_iteration(self, pipeline):
+        """资金流每2轮刷新: iteration=1 + iteration=2 (3轮中调用2次)"""
+        pipeline.test_mode = False  # 允许多轮迭代，由 _sleep_or_break 控制
         ctx = make_ctx("000001")
         pipeline._fetch_and_convert = MagicMock(return_value=[ctx])
         pipeline._enrich_fund_flow = MagicMock()
@@ -150,8 +152,8 @@ class TestFundFlowFirstIteration:
 
         pipeline._run_stage2([ctx])
 
-        # _enrich_fund_flow 只被调用一次
-        assert pipeline._enrich_fund_flow.call_count == 1
+        # iteration=1 和 iteration=2 各调用一次 (每2轮刷新)
+        assert pipeline._enrich_fund_flow.call_count == 2
 
     def test_fund_flow_skipped_when_no_fetchers(self, pipeline):
         """没有资金流 fetcher 时跳过, 不崩溃"""
@@ -220,6 +222,7 @@ class TestLateMetricsPropagation:
         """第二轮的新数据覆盖第一轮的旧数据"""
         from data_provider.kline_provider import KlineProvider
 
+        pipeline.test_mode = False  # 允许多轮迭代，由 _sleep_or_break 控制
         ctx = make_ctx("000001", late_price_change=5.0, late_volume_ratio=3.0)
         pipeline._fetch_and_convert = MagicMock(return_value=[ctx])
         pipeline._enrich_fund_flow = MagicMock()
@@ -269,6 +272,7 @@ class TestEarlyExitOnEmpty:
 
     def test_continues_when_some_pass(self, pipeline):
         """有股票通过 L2 → 继续循环"""
+        pipeline.test_mode = False  # 允许多轮迭代，由 _sleep_or_break 控制
         ctx = make_ctx("000001")  # 会通过 L2
         pipeline._fetch_and_convert = MagicMock(return_value=[ctx])
         pipeline._enrich_fund_flow = MagicMock()
