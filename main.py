@@ -24,6 +24,8 @@ load_dotenv()
 
 from orchestration.config import SystemConfig
 from orchestration.pipeline import LateSessionPipeline
+from data_provider.kline_provider import KlineProvider
+from data_provider.northbound_fetcher import get_northbound_sentiment
 
 logging.basicConfig(
     level=logging.INFO,
@@ -152,18 +154,144 @@ def main():
 
 
 def _run_dry_run(pipeline):
-    """仅拉取数据并显示摘要"""
-    logger.info("Dry-run: 拉取数据...")
+    """盘前数据源连通性诊断 — 逐项测试所有实盘依赖的数据接口
+
+    覆盖: 行情快照 / 预加载(行业+解禁) / K线(mootdx+Sina) /
+          东财资金流(门控+熔断) / 新浪资金流 / 公告API / 北向状态
+    """
+    import time
+    results: dict[str, dict] = {}  # source → {ok, detail, elapsed}
+
+    def _record(name: str, ok: bool, detail: str, t0: float):
+        results[name] = {"ok": ok, "detail": detail, "elapsed": time.time() - t0}
+
+    print("\n" + "=" * 64)
+    print("  盘前数据源连通性诊断")
+    print("=" * 64)
+
+    # ── 1. 行情快照 ───────────────────────────────────────────
+    print("\n[1/7] 行情快照 (Tencent API)...")
+    t0 = time.time()
     try:
         quotes = pipeline.fetcher_mgr.fetch_snapshot()
-        logger.info(f"拉取 {len(quotes)} 只股票")
-        for q in quotes[:10]:
-            logger.info(f"  {q.code} {q.name}: {q.price:.2f} ({q.change_pct:+.2f}%) "
-                        f"成交额{q.turnover/1e8:.2f}亿 换手{q.turnover_rate:.1f}%")
+        active = [q for q in quotes if q.price > 0 and not q.is_suspended]
+        _record("行情快照", True,
+                f"{len(quotes)}只 (有效 {len(active)}只, 数据源: {pipeline.fetcher_mgr.get_active_name()})", t0)
     except RuntimeError as e:
-        logger.error(f"数据拉取失败: {e}")
-        _print_troubleshooting_guide()
-        sys.exit(1)
+        _record("行情快照", False, str(e)[:100], t0)
+
+    # ── 2. 预加载数据 ─────────────────────────────────────────
+    print("[2/7] 预加载 (同花顺行业行情 + 限售解禁 + 概念标签)...")
+    t0 = time.time()
+    try:
+        pipeline.preloader.load_all()
+        n_sectors = len(pipeline.preloader.sector_performance or {})
+        n_unlock = len(pipeline.preloader.unlock_stocks or set())
+        n_concept = len(pipeline.preloader.hot_concepts or {})
+        _record("预加载", True,
+                f"{n_sectors}行业行情, {n_unlock}条解禁, {n_concept}概念股", t0)
+    except Exception as e:
+        _record("预加载", False, str(e)[:100], t0)
+
+    # ── 3. K线 (mootdx + Sina回退) ─────────────────────────────
+    print("[3/7] K线 (mootdx TCP → Sina HTTP 回退)...")
+    t0 = time.time()
+    try:
+        kp = KlineProvider()
+        # 用贵州茅台(600519)和宁德时代(300750)测试，覆盖沪深两市
+        klines = kp.load_daily_batch(["600519", "300750"], bars=5)
+        n_ok = sum(1 for df in klines.values() if df is not None and len(df) > 0)
+        _record("K线", n_ok >= 1,
+                f"{n_ok}/2只成功 (mootdx→Sina回退)", t0)
+    except Exception as e:
+        _record("K线", False, str(e)[:100], t0)
+
+    # ── 4. 东财资金流 (push2his, 走 em_get 门控 + 熔断) ─────────
+    print("[4/7] 东财 push2his 资金流 (em_get 门控 + 熔断器)...")
+    t0 = time.time()
+    try:
+        from data_provider.eastmoney_flow_fetcher import EastmoneyFlowFetcher
+        ef = EastmoneyFlowFetcher(timeout=10.0, max_workers=1)
+        test_codes = ["600519"]  # 仅测1只，减少API调用
+        flow_data = ef.enrich_batch(test_codes)
+        if flow_data:
+            d = flow_data.get("600519", {})
+            _record("东财资金流", True,
+                    f"主力{d.get('mainForce', 0):.0f}万, 主动买入{d.get('active_buy_ratio', 0):.1f}%", t0)
+        else:
+            breaker_state = ef._breaker.state.value if hasattr(ef, '_breaker') else 'N/A'
+            _record("东财资金流", False, f"返回空 (熔断状态: {breaker_state})", t0)
+    except Exception as e:
+        _record("东财资金流", False, str(e)[:100], t0)
+
+    # ── 5. 东财分钟资金流 (push2, 走 em_urlopen 门控 + 熔断) ────
+    print("[5/7] 东财 push2 分钟资金流 (em_urlopen 门控 + 熔断器)...")
+    t0 = time.time()
+    try:
+        from data_provider.eastmoney_minute_flow import EastmoneyMinuteFlowFetcher
+        mf = EastmoneyMinuteFlowFetcher(timeout=8.0, max_workers=1)
+        minute_data = mf.enrich_batch(["600519"])
+        if minute_data:
+            d = minute_data.get("600519", {})
+            _record("东财分钟流", True,
+                    f"主力{d.get('mainForce', 0):.0f}万, 超大单{d.get('super', 0):.0f}万", t0)
+        else:
+            breaker_state = mf._breaker.state.value if hasattr(mf, '_breaker') else 'N/A'
+            _record("东财分钟流", False, f"返回空 (熔断状态: {breaker_state})", t0)
+    except Exception as e:
+        _record("东财分钟流", False, str(e)[:100], t0)
+
+    # ── 6. 新浪资金流 ─────────────────────────────────────────
+    print("[6/7] 新浪资金流 (active_buy_ratio + 备选主力)...")
+    t0 = time.time()
+    try:
+        from data_provider.sina_fund_flow import SinaFundFlowFetcher
+        sf = SinaFundFlowFetcher(timeout=8.0, max_workers=1)
+        sina_data = sf.enrich_batch(["600519"])
+        if sina_data:
+            d = sina_data.get("600519", {})
+            _record("新浪资金流", True,
+                    f"主力{d.get('mainForce', 0):.0f}万, 主动买入{d.get('active_buy_ratio', 0):.1f}%", t0)
+        else:
+            _record("新浪资金流", False, "返回空", t0)
+    except Exception as e:
+        _record("新浪资金流", False, str(e)[:100], t0)
+
+    # ── 7. 东财公告API + 北向状态 ──────────────────────────────
+    print("[7/7] 东财公告API + 北向资金状态...")
+    t0 = time.time()
+    try:
+        nh = pipeline.news_fetcher.health_check()
+        nb = get_northbound_sentiment()
+        detail_parts = [f"公告采样{nh.get('sample_count', 0)}条"]
+        detail_parts.append(f"北向={'可用' if nb.get('available') else '断供'}")
+        _record("公告+北向", nh.get("ok", False),
+                ", ".join(detail_parts), t0)
+    except Exception as e:
+        _record("公告+北向", False, str(e)[:100], t0)
+
+    # ── 汇总 ──────────────────────────────────────────────────
+    print("\n" + "=" * 64)
+    print("  诊断结果")
+    print("=" * 64)
+    all_ok = True
+    for name, r in results.items():
+        status = "PASS" if r["ok"] else "FAIL"
+        print(f"  [{status}] {name:<12s} ({r['elapsed']:.1f}s)  {r['detail']}")
+        if not r["ok"]:
+            all_ok = False
+
+    print("-" * 64)
+    total_elapsed = sum(r["elapsed"] for r in results.values())
+    print(f"  总计: {sum(1 for r in results.values() if r['ok'])}/{len(results)} 通过 ({total_elapsed:.1f}s)")
+
+    if all_ok:
+        print("\n  所有数据源正常，可以执行实盘。")
+    else:
+        failed = [n for n, r in results.items() if not r["ok"]]
+        print(f"\n  [!!] 以下数据源异常: {', '.join(failed)}")
+        print("  管线将自动降级，但建议排查后重试。")
+    print()
 
 
 def _print_troubleshooting_guide():
