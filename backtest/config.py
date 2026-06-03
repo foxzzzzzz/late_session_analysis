@@ -80,12 +80,22 @@ class BacktestConfig(SystemConfig):
         self.kline_min_consecutive_close_rise = int(os.getenv("BT_KLINE_MIN_CONSECUTIVE_CLOSE_RISE", str(self.kline_min_consecutive_close_rise)))
         self.kline_min_close_rise_pct = float(os.getenv("BT_KLINE_MIN_CLOSE_RISE_PCT", str(self.kline_min_close_rise_pct)))
 
-        # 回测 L4 推荐阈值 — 回测缺资金流+LLM+盘口, 实际上限~67分
-        # 按实盘"资金❌+LLM❌"场景(65/55/40)等比折算: 55/48/38
+        # 回测 L4 推荐阈值 — 回测缺实盘资金流+LLM+盘口, 得分上限~50(中位数~30)
+        # 回测专用阈值 35/25/15 (e1ec58f原始值), 不可与实盘85/75/60共用
         # 可通过 BT_L4_* 环境变量覆盖
-        self.l4_strong_buy = float(os.getenv("BT_L4_STRONG_BUY", "55.0"))
-        self.l4_buy = float(os.getenv("BT_L4_BUY", "48.0"))
-        self.l4_watch = float(os.getenv("BT_L4_WATCH", "38.0"))
+        self.l4_high_threshold = float(os.getenv("BT_L4_HIGH_THRESHOLD", "35.0"))
+        self.l4_buy_threshold = float(os.getenv("BT_L4_BUY_THRESHOLD", "25.0"))
+        self.l4_medium_threshold = float(os.getenv("BT_L4_MEDIUM_THRESHOLD", "15.0"))
+
+        # 修复regime覆盖字典中的L4条目 — SystemConfig的bull/bear覆盖用的是实盘值
+        # (85/75/60), _regime_value()会优先返回覆盖值, 导致回测阈值被架空
+        # 等比缩放到回测量表: bull=同中性(35/25/15), bear=略降(32/23/13)
+        self._regime_overrides["bull"]["l4_high_threshold"] = self.l4_high_threshold
+        self._regime_overrides["bull"]["l4_buy_threshold"] = self.l4_buy_threshold
+        self._regime_overrides["bull"]["l4_medium_threshold"] = self.l4_medium_threshold
+        self._regime_overrides["bear"]["l4_high_threshold"] = 32.0
+        self._regime_overrides["bear"]["l4_buy_threshold"] = 23.0
+        self._regime_overrides["bear"]["l4_medium_threshold"] = 13.0
 
         # 回测 L3 波动率 — 继承实盘值 (默认0.60), 可通过 BT_L3_MAX_VOLATILITY 独立覆盖
         self.l3_max_volatility = float(os.getenv("BT_L3_MAX_VOLATILITY", str(self.l3_max_volatility)))

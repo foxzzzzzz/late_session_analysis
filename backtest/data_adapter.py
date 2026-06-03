@@ -5,6 +5,7 @@ from typing import Optional
 import pandas as pd
 
 from screening.context import StockContext
+from data_provider.board_utils import get_limit_pct
 from backtest.data_loader import compute_s2_metrics
 from backtest.synthetic_data import estimate_capital_flow, estimate_order_book, estimate_concepts
 
@@ -115,8 +116,8 @@ class HistoricalDataAdapter:
             low=low,
             open=open_p,
             pre_close=pre_close,
-            limit_up=round(pre_close * (1 + _get_limit_pct(code) / 100), 2),
-            limit_down=round(pre_close * (1 - _get_limit_pct(code) / 100), 2),
+            limit_up=round(pre_close * (1 + get_limit_pct(code) / 100), 2),
+            limit_down=round(pre_close * (1 - get_limit_pct(code) / 100), 2),
             vol_ratio=vol_ratio,
             amplitude=amplitude,
             market_cap=market_cap,
@@ -201,11 +202,3 @@ class HistoricalDataAdapter:
         return 0.0
 
 
-def _get_limit_pct(code: str) -> float:
-    """根据股票代码判断涨跌停幅度: 主板10%, 科创板20%, 北交所30%"""
-    code = str(code).zfill(6)
-    if code.startswith("68"):   # 科创板
-        return 20.0
-    if code.startswith(("4", "8")):  # 北交所
-        return 30.0
-    return 10.0  # 主板/创业板

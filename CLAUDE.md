@@ -96,12 +96,12 @@ Priority: `tencent → sector_based → sina → efinance → akshare`. Falls ba
 
 Historical replay of the full pipeline using baostock daily + 5-min bars. Key design decisions:
 - **Synthetic data estimation** (`backtest/synthetic_data.py`) — capital flow (big_order_net/ratio, active_buy_ratio) estimated from 5-min bar direction×amount; bid_vol/ask_vol from last bar's close position; concepts from sector name. L4 C dimension no longer zero.
-- **L4 thresholds** — strong_buy≥55, buy≥48, watch≥38. Scores with synthetic data typically range 40-70 (vs 30-39 without).
+- **L4 thresholds** — strong_buy≥35, buy≥25, watch≥15. Scores max out ~50 without real capital flow data (C dimension ~7/20 max) and no LLM.
 - **L3 volatility** — max_volatility 0.60, same as live
 - **14:59 cutoff** on 5-min bars — captures full late session including 14:50-15:00 peak volume
-- **K-line thresholds relaxed** — yang_ratio 0.50 (vs 0.75 live), close_momentum 2 days (vs 3 live) — to generate sufficient signals for strategy validation
+- **K-line thresholds** — now aligned with live (yang_ratio 0.50, close_momentum 3 days); formerly relaxed to generate more signals
 - **Stop-loss/take-profit** at ±5% — priority: stop_loss > take_profit > next_open
-- **No LLM** — `llm_results={}`, `rule_weight=1.0`. LLM data would introduce lookahead bias.
+- **No LLM** — `llm_results={}`, merger auto-falls back to pure rule scoring. LLM data would introduce lookahead bias.
 - **No S0** — uses fixed `TARGET_SECTORS` components directly (`skip_s0=True`)
 - **Sector performance backfilled** — computed from daily snapshot per sector
 - **parquet disk cache** — daily bars with date-range validity check; 5-min bar cache per stock per day

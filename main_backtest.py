@@ -156,7 +156,7 @@ def main():
     print(f"  --- 回测专用阈值 ---")
     print(f"  L2: 量比≥{config.l2_volume_ratio}  尾盘拉升≥{config.l2_late_rally_pct}%  量占比≥{config.l2_last5min_vol_pct}%")
     print(f"  K线: 阳线占比≥{config.kline_min_yang_ratio_4d}  连涨≥{config.kline_min_consecutive_close_rise}天  ATR {config.kline_min_atr_pct}-{config.kline_max_atr_pct}%")
-    print(f"  L4: strong_buy≥{config.l4_strong_buy}  buy≥{config.l4_buy}  watch≥{config.l4_watch}")
+    print(f"  L4: strong_buy≥{config.l4_high_threshold}  buy≥{config.l4_buy_threshold}  watch≥{config.l4_medium_threshold}")
     print("=" * 60 + "\n")
 
     # 执行回测

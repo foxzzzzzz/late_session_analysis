@@ -521,15 +521,15 @@ class BacktestEngine:
         sorted_ctx = sorted(scored, key=lambda c: c.total_score, reverse=True)
         top30 = sorted_ctx[:self.l4_config.max_total_output]
 
-        # 融合排序 (纯规则，rule_weight=1.0, 回测专用阈值)
+        # 融合排序 (纯规则, 无LLM → merger自动使用rule_weight=1.0)
         regime = self._day_regimes.get(date_str, self.config.regime_mode)
         if regime == "auto":
             regime = "neutral"
         merge_and_rank(
-            top30, llm_results={}, rule_weight=1.0,
-            strong_buy_threshold=self.config._regime_value("l4_strong_buy", regime),
-            buy_threshold=self.config._regime_value("l4_buy", regime),
-            watch_threshold=self.config._regime_value("l4_watch", regime),
+            top30, llm_results={},
+            strong_buy_threshold=self.config._regime_value("l4_high_threshold", regime),
+            buy_threshold=self.config._regime_value("l4_buy_threshold", regime),
+            watch_threshold=self.config._regime_value("l4_medium_threshold", regime),
         )
 
         return top30
