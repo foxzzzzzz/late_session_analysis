@@ -198,9 +198,11 @@ class TestDataQualityFlags:
             "morning_volume": 500000, "afternoon_volume": 600000,
             "last_5min_volume": 120000, "broke_high": False, "intraday_high": 10.1,
         }
+        from datetime import datetime
         pipeline._fund_flow_data["000001"] = {
             "mainForce": 500,  # 万元
             "active_buy_ratio": 60.0,
+            "data_date": datetime.now().strftime("%Y-%m-%d"),
         }
         ctx = make_ctx("000001")
         pipeline._enrich_contexts([ctx])

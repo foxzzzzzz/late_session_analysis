@@ -26,6 +26,7 @@ import json
 import logging
 import time
 import urllib.request
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Optional
@@ -39,14 +40,20 @@ _SINA_API = (
 
 
 class SinaFundFlowFetcher:
-    """新浪财经资金流向获取器 — 单股JSON API，并发拉取"""
+    """新浪财经资金流向获取器 — 单股JSON API，分批并发拉取
 
-    def __init__(self, timeout: float = 8.0, max_workers: int = 8):
+    Sina API 高频请求会触发 HTTP 456 封禁 (~60s)。
+    使用分批延迟 + 降并发 + 456检测来规避。
+    """
+
+    def __init__(self, timeout: float = 8.0, max_workers: int = 4):
         self.timeout = timeout
         self.max_workers = max_workers
+        self._batch_delay = 0.5  # 批次间延迟(秒), 避免触发456
+        self._blocked_until: float = 0.0  # 456封禁到期时间戳
 
     def enrich_batch(self, codes: list[str]) -> dict[str, dict]:
-        """批量获取资金流向，并发拉取
+        """批量获取资金流向，分批并发拉取
 
         Returns:
             {code: {mainForce(万元), retail(万元), mid(万元), large(0), super(0),
@@ -58,19 +65,37 @@ class SinaFundFlowFetcher:
         unique_codes = list(dict.fromkeys([str(c).zfill(6) for c in codes]))
         results: dict[str, dict] = {}
 
-        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(unique_codes))) as pool:
-            futures = {
-                pool.submit(self._fetch_one, code): code
-                for code in unique_codes
-            }
-            for future in as_completed(futures):
-                code = futures[future]
-                try:
-                    data = future.result()
-                    if data:
-                        results[code] = data
-                except Exception as e:
-                    logger.debug(f"新浪资金流 [{code}] 异常: {e}")
+        batch_size = self.max_workers
+        for i in range(0, len(unique_codes), batch_size):
+            batch = unique_codes[i:i + batch_size]
+
+            with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+                futures = {
+                    pool.submit(self._fetch_one, code): code
+                    for code in batch
+                }
+                for future in as_completed(futures):
+                    code = futures[future]
+                    try:
+                        data = future.result()
+                        if data:
+                            results[code] = data
+                    except Exception as e:
+                        logger.debug(f"新浪资金流 [{code}] 异常: {e}")
+
+            # 批次间延迟 + 检查是否被456封禁
+            remaining = i + batch_size
+            if remaining < len(unique_codes):
+                # 如果前一批全部失败，检查是否触发了456封禁
+                batch_codes = set(batch)
+                batch_success = sum(1 for c in batch_codes if c in results)
+                if batch_success == 0 and batch:
+                    logger.warning(
+                        f"新浪资金流: 连续批次全部失败 ({i+1}-{min(remaining, len(unique_codes))}), "
+                        f"可能已触发HTTP 456封禁，跳过后面的请求"
+                    )
+                    break
+                time.sleep(self._batch_delay)
 
         today_str = datetime.now().strftime("%Y-%m-%d")
         today_count = sum(
@@ -80,6 +105,8 @@ class SinaFundFlowFetcher:
         parts = [f"{len(results)}/{len(unique_codes)}"]
         if today_count:
             parts.append(f"当日 {today_count}")
+        if len(results) == 0 and len(unique_codes) > 0:
+            parts.append("(全失败, 可能IP封禁)")
         logger.info(f"新浪资金流向: {', '.join(parts)}")
         return results
 
@@ -92,6 +119,15 @@ class SinaFundFlowFetcher:
             req.add_header("User-Agent", "Mozilla/5.0")
             resp = urllib.request.urlopen(req, timeout=self.timeout)
             raw = json.loads(resp.read().decode("gbk"))
+        except urllib.error.HTTPError as e:
+            if e.code == 456:
+                logger.warning(
+                    f"新浪资金流 HTTP 456 — IP已被Sina临时封禁，"
+                    f"后续请求将跳过 (~60s后恢复)"
+                )
+            else:
+                logger.debug(f"新浪资金流 [{code}] HTTP {e.code}: {e.reason}")
+            return None
         except Exception as e:
             logger.debug(f"新浪资金流 [{code}] 请求失败: {e}")
             return None

@@ -47,7 +47,7 @@ class EastmoneyMinuteFlowFetcher:
         self.max_workers = max_workers
         self._last_success: dict[str, dict] = {}
         self._stagger_range = (0.3, 0.6)
-        self._breaker = CircuitBreaker("eastmoney_push2", failure_threshold=3, cooldown_sec=600)
+        self._breaker = CircuitBreaker("eastmoney_push2", failure_threshold=5, cooldown_sec=120)
 
     def enrich_batch(self, codes: list[str]) -> dict[str, dict]:
         """批量获取分钟级资金流向

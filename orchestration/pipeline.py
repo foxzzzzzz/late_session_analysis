@@ -456,10 +456,10 @@ class LateSessionPipeline:
                     except StopIteration:
                         pass
 
-            # === S3资金流回填 (从S2缓存恢复) ===
+            # === S3资金流回填 (从S2缓存恢复, 仅当日数据) ===
             if self._fund_flow_data:
                 fd = self._fund_flow_data.get(ctx.code, {})
-                if fd:
+                if fd and fd.get("data_date", "") == datetime.now().strftime("%Y-%m-%d"):
                     ctx.big_order_net = fd.get("mainForce", 0) * 10000
                     ctx.big_order_ratio = (
                         abs(ctx.big_order_net) / max(ctx.turnover, 1)
@@ -822,7 +822,10 @@ class LateSessionPipeline:
             f"资金流向: 分钟线={n_minute} 新浪={n_sina} push2his={n_his}"
         )
 
+        today_str = datetime.now().strftime("%Y-%m-%d")
+
         # 保存合并数据供 S3 回填 (三个源都可能有部分股票，合并而非二选一)
+        # push2his 仅保留当日数据 — 交易时段klt=101只有昨日数据，不能混入当日决策
         self._fund_flow_data = {}
         all_codes = set()
         all_codes.update(minute_data.keys())
@@ -832,11 +835,12 @@ class LateSessionPipeline:
             md = minute_data.get(code, {})
             sd = sina_data.get(code, {})
             hd = push2his_data.get(code, {})
-            # 合并: mainForce 优先分钟线, active_buy_ratio 始终从新浪取
+            hd_today = hd if hd.get("data_date", "") == today_str else {}
+            # 合并: mainForce 优先分钟线 → 新浪 → push2his(仅当日)
             self._fund_flow_data[code] = {
-                "mainForce": md.get("mainForce") or sd.get("mainForce") or hd.get("mainForce") or 0,
-                "active_buy_ratio": sd.get("active_buy_ratio") or hd.get("active_buy_ratio", 50.0),
-                "data_date": sd.get("data_date") or hd.get("data_date") or md.get("data_date", ""),
+                "mainForce": md.get("mainForce") or sd.get("mainForce") or hd_today.get("mainForce") or 0,
+                "active_buy_ratio": sd.get("active_buy_ratio") or hd_today.get("active_buy_ratio", 50.0),
+                "data_date": sd.get("data_date") or hd_today.get("data_date") or md.get("data_date", ""),
             }
 
         # Sina双时间点差分: 每次刷新后计算最近区间增量并更新基线 (滚动基线，不累积)
@@ -864,7 +868,6 @@ class LateSessionPipeline:
             )
 
         today_count = 0
-        today_str = datetime.now().strftime("%Y-%m-%d")
 
         for ctx in enrich_candidates:
             md = minute_data.get(ctx.code, {})
@@ -883,9 +886,11 @@ class LateSessionPipeline:
                 flow_detail = sd
                 ctx.data_quality_flags['fund_flow_source'] = 'sina'
             if main_force is None and hd:
-                main_force = hd.get("mainForce")
-                flow_detail = hd
-                ctx.data_quality_flags['fund_flow_source'] = 'push2his'
+                # push2his 日线交易时段只返昨日数据 — 必须校验日期，避免昨日资金流入当日决策
+                if hd.get("data_date", "") == today_str:
+                    main_force = hd.get("mainForce")
+                    flow_detail = hd
+                    ctx.data_quality_flags['fund_flow_source'] = 'push2his'
 
             if main_force is None:
                 continue
@@ -898,9 +903,10 @@ class LateSessionPipeline:
             )
 
             # active_buy_ratio: 始终从新浪取 (已修正为 r0_in/(r0_in+r0_out)*100)
-            # 新浪失败 → push2his 降级
-            ab_source = sd or hd
-            ctx.active_buy_ratio = ab_source.get("active_buy_ratio", 50.0)
+            # 新浪失败 → push2his 降级 (仅当日数据)
+            ab_source = sd or (hd if hd.get("data_date", "") == today_str else None)
+            if ab_source:
+                ctx.active_buy_ratio = ab_source.get("active_buy_ratio", 50.0)
 
             # 尾盘实时 active_buy_ratio: Sina滚动基线差分 (最近区间增量)
             delta_cache = getattr(self, '_sina_delta_cache', {})
@@ -1092,23 +1098,19 @@ class LateSessionPipeline:
 
         if capital_ok and llm_ok:
             offset = 0
-            rule_weight = 0.7
         elif capital_ok and not llm_ok:
             offset = -7
-            rule_weight = 1.0
         elif not capital_ok and llm_ok:
             offset = -10
-            rule_weight = 0.7
         else:
             offset = -17
-            rule_weight = 1.0
 
         logger.info(
             f"S4 推荐阈值 (regime={self.regime}): "
             f"strong_buy≥{base_sb + offset:.0f} buy≥{base_buy + offset:.0f} watch≥{base_watch + offset:.0f}"
         )
 
-        top30 = merge_and_rank(top30, llm_results, rule_weight=rule_weight,
+        top30 = merge_and_rank(top30, llm_results,
             strong_buy_threshold=base_sb + offset,
             buy_threshold=base_buy + offset,
             watch_threshold=base_watch + offset,

@@ -17,5 +17,12 @@
 | 📊 技术 | 20日位置 | {{ "%.0f%%"|format(stock.position_20d) }} |
 | 🏢 板块 | {{ stock.sector }} | {{ "%+.2f%%"|format(stock.sector_performance) }} |
 | 🤖 LLM | 决策 | {{ stock.llm_decision }} ({{ stock.llm_confidence }}) |
+| 🤖 LLM | 评分 | {{ "%.0f"|format(stock.llm_score) }}/100 |
 | 🤖 LLM | 理由 | {{ stock.llm_reason }} |
+{% if stock.llm_risk_flags -%}
+| 🤖 LLM | 风险 | {{ stock.llm_risk_flags | join(', ') }} |
+{% endif -%}
+{% if stock.llm_key_factors -%}
+| 🤖 LLM | 因子 | {{ stock.llm_key_factors | join(', ') }} |
+{% endif -%}
 | 🎯 评分 | 综合 | {{ "%.0f"|format(stock.final_score) }}/100 |

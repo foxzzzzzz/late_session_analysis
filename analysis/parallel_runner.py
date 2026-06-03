@@ -16,6 +16,9 @@ from analysis.prompts import SYSTEM_PROMPT, make_stock_prompt
 
 logger = logging.getLogger(__name__)
 
+# 旧格式decision→分数映射 (向后兼容)
+_DECISION_SCORE_MAP = {'buy': 85, 'hold': 55, 'skip': 15}
+
 
 class ParallelLLMRunner:
     """并行LLM调用调度器"""
@@ -32,7 +35,7 @@ class ParallelLLMRunner:
             contexts: Top 30 StockContext列表
 
         Returns:
-            {code: {decision, confidence, reason}} 字典
+            {code: {decision, confidence, llm_score, risk_flags, key_factors, reason}} 字典
         """
         if not contexts:
             return {}
@@ -62,13 +65,11 @@ class ParallelLLMRunner:
                         results[code] = result
                         success_count += 1
                     else:
-                        results[code] = {"decision": "skip", "confidence": "C",
-                                         "reason": "LLM超时或失败", "fallback": True}
+                        results[code] = _fallback_result("LLM超时或失败")
                         fail_count += 1
                 except Exception as e:
                     logger.debug(f"LLM并行调用异常 {code}: {e}")
-                    results[code] = {"decision": "skip", "confidence": "C",
-                                     "reason": "调用异常", "fallback": True}
+                    results[code] = _fallback_result("调用异常")
                     fail_count += 1
 
         elapsed = time.time() - t0
@@ -85,30 +86,70 @@ class ParallelLLMRunner:
         if not response:
             return None
 
-        # 解析JSON响应
         return self._parse_response(response, ctx.code)
 
     @staticmethod
     def _parse_response(response: str, code: str) -> Optional[dict]:
-        """解析LLM的JSON响应"""
+        """解析LLM的JSON响应，支持新旧两种格式"""
+        data = None
+
+        # 尝试直接解析
         try:
-            # 尝试直接解析
-            result = json.loads(response)
-            if all(k in result for k in ['decision', 'confidence', 'reason']):
-                return result
+            data = json.loads(response)
         except json.JSONDecodeError:
             pass
 
         # 尝试从文本中提取JSON
-        try:
-            start = response.find('{')
-            end = response.rfind('}') + 1
-            if start >= 0 and end > start:
-                result = json.loads(response[start:end])
-                if all(k in result for k in ['decision', 'confidence', 'reason']):
-                    return result
-        except (json.JSONDecodeError, KeyError):
-            pass
+        if data is None:
+            try:
+                start = response.find('{')
+                end = response.rfind('}') + 1
+                if start >= 0 and end > start:
+                    data = json.loads(response[start:end])
+            except (json.JSONDecodeError, KeyError):
+                pass
 
-        logger.warning(f"LLM响应解析失败 {code}: {response[:100]}")
-        return None
+        if data is None or not isinstance(data, dict):
+            logger.warning(f"LLM响应解析失败 {code}: {response[:100]}")
+            return None
+
+        # 验证必需字段
+        if 'decision' not in data:
+            logger.warning(f"LLM响应缺少decision字段 {code}: {response[:100]}")
+            return None
+
+        # 提取核心字段
+        result = {
+            'decision': data.get('decision', 'skip'),
+            'confidence': data.get('confidence', 'C'),
+            'reason': data.get('reason', ''),
+        }
+
+        # 新字段: llm_score (优先使用，否则从decision映射)
+        if 'llm_score' in data and isinstance(data['llm_score'], (int, float)):
+            result['llm_score'] = float(data['llm_score'])
+        else:
+            result['llm_score'] = float(_DECISION_SCORE_MAP.get(result['decision'], 15))
+
+        # 新字段: risk_flags
+        risk_flags = data.get('risk_flags', [])
+        result['risk_flags'] = risk_flags if isinstance(risk_flags, list) else []
+
+        # 新字段: key_factors
+        key_factors = data.get('key_factors', [])
+        result['key_factors'] = key_factors if isinstance(key_factors, list) else []
+
+        return result
+
+
+def _fallback_result(reason: str) -> dict:
+    """LLM失败时的兜底结果"""
+    return {
+        "decision": "skip",
+        "confidence": "C",
+        "reason": reason,
+        "llm_score": 0.0,
+        "risk_flags": [],
+        "key_factors": [],
+        "fallback": True,
+    }

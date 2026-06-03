@@ -101,6 +101,9 @@ class StockContext:
     llm_confidence: str = ""            # A/B/C
     llm_decision: str = ""              # buy/hold/skip
     llm_reason: str = ""                # 简要理由
+    llm_score: float = 0.0             # LLM 0-100综合评分
+    llm_risk_flags: list[str] = field(default_factory=list)   # 风险标记
+    llm_key_factors: list[str] = field(default_factory=list)  # 关键因子
     llm_fallback: bool = False          # 是否降级到规则评分
 
     # === 数据质量标记 ===

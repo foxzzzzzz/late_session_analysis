@@ -95,7 +95,14 @@
 | 尾盘涨幅 | {{ "%+.2f%%"|format(stock.late_price_change) }} | 异动类型 | {{ stock.anomaly_type }} |
 | 量比(午后/上午) | {{ "%.1f"|format(stock.afternoon_volume_ratio) }}x | 换手率 | {{ "%.1f%%"|format(stock.turnover_rate) }} |
 | 大单流入 | {{ "%.0f"|format(stock.big_order_net/1e4) }}万 | 评分 | A{{"%.0f"|format(stock.score_tail_strength)}} B{{"%.0f"|format(stock.score_technical)}} C{{"%.0f"|format(stock.score_capital)}} D{{"%.0f"|format(stock.score_ma_system)}} E{{"%.0f"|format(stock.score_market_env)}} → {{"%.0f"|format(stock.total_score)}}/100 |
-| LLM决策 | {{ stock.llm_decision }} ({{ stock.llm_confidence }}) | LLM理由 | {{ stock.llm_reason }} |
+| LLM决策 | {{ stock.llm_decision }} ({{ stock.llm_confidence }}) | LLM评分 | {{ "%.0f"|format(stock.llm_score) }}/100 |
+| LLM理由 | {{ stock.llm_reason }} | 规则评分 | {{ "%.0f"|format(stock.total_score) }}/100 |
+{% if stock.llm_risk_flags -%}
+| ⚠ 风险 | {{ stock.llm_risk_flags | join(', ') }} |
+{% endif -%}
+{% if stock.llm_key_factors -%}
+| 🔑 因子 | {{ stock.llm_key_factors | join(', ') }} |
+{% endif -%}
 
 {% endfor -%}
 {% if buy_stocks -%}
