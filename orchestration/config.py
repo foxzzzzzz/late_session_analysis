@@ -333,9 +333,9 @@ class SystemConfig:
             return  # 已从 env 加载
         self._regime_overrides = {
             "bull": {
-                # K-line: 牛市候选多, 收紧阳线比例, 放宽涨幅/波动限制
+                # K-line: 牛市候选多, 收紧形态要求挑强股
                 "kline_min_yang_ratio_4d": 0.75,
-                "kline_min_consecutive_close_rise": 2,
+                "kline_min_consecutive_close_rise": 3,
                 "kline_max_atr_pct": 9.0,
                 "kline_max_consecutive_up": 4,
                 "kline_max_single_day_pct": 7.5,
@@ -348,17 +348,17 @@ class SystemConfig:
                 "l2_recovery_drop": 2.5,
                 "l2_recovery_rise": 1.0,
                 "l2_active_buy_pct": 50.0,
-                "l2_late_active_buy_ratio_min": 40.0,
+                "l2_late_active_buy_ratio_min": 55.0,
                 "l2_big_order_ratio_mult": 1.1,
-                # L3: 接受更高波动和更低历史胜率
-                "l3_max_volatility": 0.65,
-                "l3_vol_ratio_min": 1.0,
-                "l3_min_history_win": 35.0,
-                "l3_vol_ratio_max": 2.5,
-                # L4: 降低推荐阈值 (~7分)
-                "l4_high_threshold": 78.0,
-                "l4_buy_threshold": 68.0,
-                "l4_medium_threshold": 52.0,
+                # L3: 收紧波动/量比/胜率要求 (候选充足可挑精品)
+                "l3_max_volatility": 0.55,
+                "l3_vol_ratio_min": 1.2,
+                "l3_min_history_win": 50.0,
+                "l3_vol_ratio_max": 1.8,
+                # L4: 同中性 (牛市高分自然通过，不需降门槛)
+                "l4_high_threshold": 85.0,
+                "l4_buy_threshold": 75.0,
+                "l4_medium_threshold": 60.0,
             },
             "bear": {
                 # K-line: 收紧波动/涨幅限制, 放宽形态要求 (熊市信号稀缺)
@@ -375,14 +375,17 @@ class SystemConfig:
                 "l2_active_buy_pct": 50.0,
                 "l2_late_active_buy_ratio_min": 50.0,
                 "l2_big_order_ratio_mult": 1.3,
-                "l2_recovery_drop": 3.5,
-                "l2_recovery_rise": 2.0,
-                # L3: 收紧波动和量比, 提高胜率要求
-                "l3_max_volatility": 0.55,
-                "l3_vol_ratio_min": 1.2,
-                "l3_min_history_win": 45.0,
-                "l3_vol_ratio_max": 1.8,
-                # L4: 保持中性值 (不再提高, 避免零信号)
+                "l2_recovery_drop": 2.5,
+                "l2_recovery_rise": 1.0,
+                # L3: 放宽波动/量比/胜率要求 (候选稀缺不能卡太死)
+                "l3_max_volatility": 0.65,
+                "l3_vol_ratio_min": 1.0,
+                "l3_min_history_win": 30.0,
+                "l3_vol_ratio_max": 2.5,
+                # L4: 降低推荐阈值 (熊市分数天然低, 需降门槛保证推荐输出)
+                "l4_high_threshold": 78.0,
+                "l4_buy_threshold": 68.0,
+                "l4_medium_threshold": 52.0,
             },
         }
 

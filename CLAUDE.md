@@ -75,7 +75,7 @@ Jinja2 Markdown report
 - **L1** (`screening/layer1_access.py`): Base filters — ST/suspended/limit-up exclusion, turnover ≥ 50M, turnover rate ≥ 1%, price ≥ ¥5.
 - **K-line** (`screening/layer_kline.py`): 7 R1 checks (atr_range, consecutive_up, up_frequency, yang_ratio, close_momentum, single_day_pct, pct_vs_atr) + 6 R2 warnings. R1 eliminates, R2 warns only.
 - **L2** (`screening/layer2_anomaly.py`): Late-session anomaly detection — volume gate (OR) + price-pattern gate (rally/steady/breakout, OR) + capital gate (AND). require_capital=True is the default; auto-relaxes when pass < l2_min_pass.
-- **L3** (`screening/layer3_technical.py`): Technical verification — MA alignment, history_win_rate (≥40%, 5-day), vol_ratio [1.1,2.0], volatility ≤0.50, consecutive_limit_ups, sector rank, bad news/unlock date filtering, volume_shrinking. Returns per-condition fail distribution in logs.
+- **L3** (`screening/layer3_technical.py`): Technical verification — MA alignment, history_win_rate (≥40%, 5-day), vol_ratio [1.1,2.0], volatility ≤0.60, consecutive_limit_ups, sector rank, bad news/unlock date filtering, volume_shrinking. Returns per-condition fail distribution in logs.
 - **L4** (`screening/layer4_scoring.py`): 100-point composite — A: tail strength (30), B: K-line form (25), C: capital flow (20), D: MA system (15), E: market environment (10). Always uses standard weights. Recommendation thresholds auto-adjust based on data availability (4 scenarios: fund flow ± LLM).
 
 ### LLM integration (`analysis/`)
@@ -97,7 +97,7 @@ Priority: `tencent → sector_based → sina → efinance → akshare`. Falls ba
 Historical replay of the full pipeline using baostock daily + 5-min bars. Key design decisions:
 - **Synthetic data estimation** (`backtest/synthetic_data.py`) — capital flow (big_order_net/ratio, active_buy_ratio) estimated from 5-min bar direction×amount; bid_vol/ask_vol from last bar's close position; concepts from sector name. L4 C dimension no longer zero.
 - **L4 thresholds** — strong_buy≥55, buy≥48, watch≥38. Scores with synthetic data typically range 40-70 (vs 30-39 without).
-- **L3 volatility relaxed** — max_volatility 0.60 (vs 0.50 live), reduces volatility eliminations in backtest
+- **L3 volatility** — max_volatility 0.60, same as live
 - **14:59 cutoff** on 5-min bars — captures full late session including 14:50-15:00 peak volume
 - **K-line thresholds relaxed** — yang_ratio 0.50 (vs 0.75 live), close_momentum 2 days (vs 3 live) — to generate sufficient signals for strategy validation
 - **Stop-loss/take-profit** at ±5% — priority: stop_loss > take_profit > next_open
