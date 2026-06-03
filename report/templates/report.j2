@@ -33,7 +33,7 @@
 {% else -%}
 > **{{ stats.llm_api_success }}/{{ stats.llm_total }} 只API调用成功**
 > ({{ stats.llm_buy_signals }} 只LLM建议买入)
-> {% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只超时降级为规则评分，阈值已相应调整{% endif %}。
+> {% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只失败降级为规则评分，阈值已相应调整{% endif %}。
 > 标记为 `[规则]` 的标的**未经过AI模型验证**，信号可靠性降低。
 {% endif -%}
 
@@ -140,7 +140,7 @@
 {% if stats.llm_disabled -%}
 **LLM分析**: 未启用 (纯规则评分模式)
 {% else -%}
-**LLM分析**: {{ stats.llm_api_success }}/{{ stats.llm_total }} API调用成功，{{ stats.llm_buy_signals }} 只建议买入{% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只超时降级{% endif %}{% if not stats.capital_data_available %} | 资金面权重已调整{% endif %}
+**LLM分析**: {{ stats.llm_api_success }}/{{ stats.llm_total }} API调用成功，{{ stats.llm_buy_signals }} 只建议买入{% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只失败降级{% endif %}{% if not stats.capital_data_available %} | 资金面权重已调整{% endif %}
 {% endif -%}
 
 **资金流向**: {% if stats.capital_data_date == 'today' %}今日实时数据{% elif stats.capital_data_date == 'yesterday' %}⚠️ 昨日降级数据{% else %}不可用{% endif %}

@@ -90,7 +90,7 @@ class ParallelLLMRunner:
 
     @staticmethod
     def _parse_response(response: str, code: str) -> Optional[dict]:
-        """解析LLM的JSON响应，支持新旧两种格式"""
+        """解析LLM的JSON响应，支持新旧格式+截断修复"""
         data = None
 
         # 尝试直接解析
@@ -108,6 +108,10 @@ class ParallelLLMRunner:
                     data = json.loads(response[start:end])
             except (json.JSONDecodeError, KeyError):
                 pass
+
+        # 尝试修复截断的JSON (LLM输出被截断时常见)
+        if data is None:
+            data = ParallelLLMRunner._try_fix_truncated_json(response)
 
         if data is None or not isinstance(data, dict):
             logger.warning(f"LLM响应解析失败 {code}: {response[:100]}")
@@ -140,6 +144,29 @@ class ParallelLLMRunner:
         result['key_factors'] = key_factors if isinstance(key_factors, list) else []
 
         return result
+
+    @staticmethod
+    def _try_fix_truncated_json(response: str) -> Optional[dict]:
+        """尝试修复LLM输出截断导致的残缺JSON"""
+        start = response.find('{')
+        if start < 0:
+            return None
+
+        fragment = response[start:]
+        open_braces = fragment.count('{') - fragment.count('}')
+        open_brackets = fragment.count('[') - fragment.count(']')
+        in_string = fragment.count('"') % 2 == 1
+
+        fixed = fragment
+        if in_string:
+            fixed += '"'
+        fixed += ']' * open_brackets
+        fixed += '}' * open_braces
+
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            return None
 
 
 def _fallback_result(reason: str) -> dict:
