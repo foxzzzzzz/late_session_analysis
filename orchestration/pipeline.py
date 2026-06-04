@@ -121,7 +121,7 @@ class LateSessionPipeline:
                 max_tokens=config.llm_max_tokens,
                 temperature=config.llm_temperature,
             )
-            self.llm_runner = ParallelLLMRunner(self.llm_client)
+            self.llm_runner = ParallelLLMRunner(self.llm_client, max_workers=4)
 
     def _init_fetchers(self) -> DataFetcherManager:
         fetchers = []

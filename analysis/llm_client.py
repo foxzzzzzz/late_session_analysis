@@ -16,15 +16,15 @@ class LLMClient:
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        max_tokens: int = 512,
+        max_tokens: int = 1024,
         temperature: float = 0.3,
-        timeout: int = 30,
+        timeout: int = 15,
     ):
         self.provider = provider or os.getenv("LLM_PROVIDER", "deepseek")
         self.model = model or os.getenv("LLM_MODEL", "deepseek-chat")
         self.api_key = api_key or os.getenv("LLM_API_KEY", "")
         self.api_base = api_base or os.getenv("LLM_API_BASE", "")
-        self.max_tokens = max_tokens or int(os.getenv("LLM_MAX_TOKENS", "512"))
+        self.max_tokens = max_tokens or int(os.getenv("LLM_MAX_TOKENS", "1024"))
         self.temperature = temperature or float(os.getenv("LLM_TEMPERATURE", "0.3"))
         self.timeout = timeout
 
