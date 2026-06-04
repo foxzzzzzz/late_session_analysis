@@ -200,7 +200,12 @@ class BacktestEngine:
 
     def _detect_daily_regimes(self, trading_days: list[str], index_df: "pd.DataFrame"):
         """逐日判定市场状态, 含防抖 (按时间顺序, 模拟实盘)"""
-        prev_state = {"regime": "neutral", "consecutive_days": 0}
+        prev_state = {
+            "regime": "neutral",
+            "consecutive_days": 0,
+            "pending_regime": "",
+            "pending_days": 0,
+        }
         for day in trading_days:
             day_ts = pd.Timestamp(f"{day[:4]}-{day[4:6]}-{day[6:8]}")
             mask = pd.to_datetime(index_df["date"]) <= day_ts
@@ -241,11 +246,33 @@ class BacktestEngine:
             if today_raw == prev_state["regime"]:
                 final = today_raw
                 prev_state["consecutive_days"] += 1
+                prev_state["pending_regime"] = ""
+                prev_state["pending_days"] = 0
             elif prev_state["regime"] == "neutral" or today_raw == "neutral":
                 final = today_raw
-                prev_state = {"regime": today_raw, "consecutive_days": 1}
+                prev_state = {
+                    "regime": today_raw,
+                    "consecutive_days": 1,
+                    "pending_regime": "",
+                    "pending_days": 0,
+                }
             else:
-                final = prev_state["regime"]
+                if prev_state.get("pending_regime") == today_raw:
+                    prev_state["pending_days"] = prev_state.get("pending_days", 0) + 1
+                else:
+                    prev_state["pending_regime"] = today_raw
+                    prev_state["pending_days"] = 1
+
+                if prev_state["pending_days"] >= 2:
+                    final = today_raw
+                    prev_state = {
+                        "regime": today_raw,
+                        "consecutive_days": 1,
+                        "pending_regime": "",
+                        "pending_days": 0,
+                    }
+                else:
+                    final = prev_state["regime"]
 
             self._day_regimes[day] = final
 

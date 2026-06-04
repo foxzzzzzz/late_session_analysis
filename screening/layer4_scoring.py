@@ -331,7 +331,7 @@ def _score_ma_system(ctx, max_d: int, cfg) -> float:
     if ctx.ma5 > 0 and ctx.low > 0 and ctx.low < ctx.ma5 * cfg.ma5_low_floor_ratio:
         score -= cfg.ma5_low_floor_penalty
 
-    return min(score * scale, max_d)
+    return max(0, min(score * scale, max_d))
 
 
 # ================================================================

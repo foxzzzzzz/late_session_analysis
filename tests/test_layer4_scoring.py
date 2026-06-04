@@ -150,3 +150,17 @@ class TestLayer4Scoring:
         # D维度应有显著得分: 多头8 + MA5加速4 + 站稳MA5 3 = 15
         # score_history 用于兼容存D维度的分数
         assert ctx.score_history >= 12
+
+    def test_ma_dimension_never_negative(self):
+        """跌破MA5扣分后，D维度也不应出现负分"""
+        ctx = make_ctx(
+            ma_alignment='',
+            ma5_accelerating=False,
+            ma5=10.0,
+            price=9.5,
+            low=9.0,
+        )
+
+        score_l4([ctx], capital_data_date='today')
+
+        assert ctx.score_ma_system == 0.0

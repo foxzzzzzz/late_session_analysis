@@ -1,5 +1,8 @@
 """LLM 分析层测试"""
 import pytest
+from concurrent.futures import TimeoutError
+from unittest.mock import patch
+
 from screening.context import StockContext
 from analysis.rule_scorer import rule_based_recommendation
 from analysis.merger import merge_and_rank, _compute_weights
@@ -192,6 +195,20 @@ class TestParallelRunner:
         assert result['llm_score'] == 0.0
         assert result['risk_flags'] == []
         assert result['key_factors'] == []
+
+    def test_batch_timeout_falls_back_for_all_missing_results(self):
+        """整体超时时，不应抛出到流水线；未完成标的全部降级"""
+        contexts = [
+            StockContext(code='000001', name='A'),
+            StockContext(code='000002', name='B'),
+        ]
+        runner = ParallelLLMRunner(client=None, max_workers=1, timeout_per_stock=0.01)
+
+        with patch('analysis.parallel_runner.as_completed', side_effect=TimeoutError):
+            results = runner.analyze_batch(contexts)
+
+        assert set(results) == {'000001', '000002'}
+        assert all(r['fallback'] for r in results.values())
 
 
 class TestPrompts:

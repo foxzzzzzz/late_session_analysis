@@ -491,9 +491,10 @@ def compute_s2_metrics(df_5min: pd.DataFrame) -> dict:
     df["_t"] = pd.to_datetime(df[t_col])
 
     # 上午 (9:30-11:30) vs 下午 (13:00-15:00)
-    morning_mask = df["_t"].dt.hour < 12
-    afternoon_mask = df["_t"].dt.hour >= 13
-    late_mask = (df["_t"].dt.hour >= 14) & (df["_t"].dt.minute >= 30)
+    minute_of_day = df["_t"].dt.hour * 60 + df["_t"].dt.minute
+    morning_mask = minute_of_day < 12 * 60
+    afternoon_mask = minute_of_day >= 13 * 60
+    late_mask = minute_of_day >= 14 * 60 + 30
 
     morning_vol = df.loc[morning_mask, turnover_col].sum() if morning_mask.any() else 0
     afternoon_vol = df.loc[afternoon_mask, turnover_col].sum() if afternoon_mask.any() else 0
@@ -502,15 +503,18 @@ def compute_s2_metrics(df_5min: pd.DataFrame) -> dict:
     late_vol = df.loc[late_mask, turnover_col].sum() if late_mask.any() else 0
     total_vol = df[turnover_col].sum()
 
-    # 尾盘量比: (尾盘每bar成交额) / (尾盘前每bar成交额) — 时间归一化
+    # 尾盘量比: 最新尾盘bar / 尾盘前每bar成交额 — 与实盘口径一致
     late_bars = late_mask.sum()
     pre_late_bars = max(pre_late_mask.sum(), 1)
-    late_rate = late_vol / max(late_bars, 1)
     pre_late_rate = pre_late_vol / pre_late_bars
-    late_volume_ratio = late_rate / max(pre_late_rate, 1.0)
+    if late_bars >= 1:
+        latest_late_bar_vol = df.loc[late_mask].iloc[-1][turnover_col]
+    else:
+        latest_late_bar_vol = 0
+    late_volume_ratio = latest_late_bar_vol / max(pre_late_rate, 1.0)
 
     # 14:30 价格
-    bar_1430 = df[(df["_t"].dt.hour == 14) & (df["_t"].dt.minute == 30)]
+    bar_1430 = df[minute_of_day == 14 * 60 + 30]
     if not bar_1430.empty:
         price_at_1430 = bar_1430.iloc[0][close_col]
     elif late_mask.any():
@@ -530,8 +534,8 @@ def compute_s2_metrics(df_5min: pd.DataFrame) -> dict:
     late_volume = df.loc[last_5min_mask, vol_col].sum() if vol_col in df.columns else 0
 
     # 突破日内高点
-    pre_1430 = df[df["_t"].dt.hour < 14]
-    after_1430 = df[(df["_t"].dt.hour >= 14) & (df["_t"].dt.minute >= 30)]
+    pre_1430 = df[minute_of_day < 14 * 60 + 30]
+    after_1430 = df[minute_of_day >= 14 * 60 + 30]
     pre_1430_high = pre_1430[high_col].max() if not pre_1430.empty else df[high_col].max()
     after_1430_high = after_1430[high_col].max() if not after_1430.empty else 0
     intraday_high = max(pre_1430_high, after_1430_high)

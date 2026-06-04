@@ -8,7 +8,7 @@
 import json
 import time
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from typing import Optional
 
 from analysis.llm_client import LLMClient
@@ -50,12 +50,12 @@ class ParallelLLMRunner:
         # 总超时 = 单只超时 × (总股票数/并发数) + 缓冲
         total_timeout = self.timeout_per_stock * (n_stocks / n_workers) + 30
 
-        with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {
-                executor.submit(self._analyze_one, ctx): ctx.code
-                for ctx in contexts
-            }
-
+        executor = ThreadPoolExecutor(max_workers=n_workers)
+        futures = {
+            executor.submit(self._analyze_one, ctx): ctx.code
+            for ctx in contexts
+        }
+        try:
             for future in as_completed(futures, timeout=total_timeout):
                 code = futures[future]
                 try:
@@ -71,6 +71,15 @@ class ParallelLLMRunner:
                     logger.debug(f"LLM并行调用异常 {code}: {e}")
                     results[code] = _fallback_result("调用异常")
                     fail_count += 1
+        except TimeoutError:
+            logger.warning("LLM并行分析整体超时，未完成标的降级")
+        finally:
+            for future, code in futures.items():
+                if code not in results:
+                    future.cancel()
+                    results[code] = _fallback_result("LLM整体超时")
+                    fail_count += 1
+            executor.shutdown(wait=False, cancel_futures=True)
 
         elapsed = time.time() - t0
         logger.info(f"LLM并行分析: {success_count}成功/{fail_count}失败 "

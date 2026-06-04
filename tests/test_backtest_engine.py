@@ -12,7 +12,7 @@ from backtest.engine import BacktestEngine
 from backtest.config import BacktestConfig
 from screening.context import StockContext
 from backtest.trade_log import Trade
-from backtest.data_loader import BacktestDataLoader
+from backtest.data_loader import BacktestDataLoader, compute_s2_metrics
 
 
 # ================================================================
@@ -219,6 +219,52 @@ class TestCutoff1459:
         df_cut = df[time_col <= cutoff]
 
         assert len(df_cut) == 3
+
+
+class TestBacktestS2Metrics:
+    def test_1400_to_1425_high_counts_as_pre_late_high(self):
+        """回测S2也应把14:00-14:25高点计入突破基准"""
+        df = pd.DataFrame({
+            "time": pd.to_datetime([
+                "2026-04-01 09:35:00",
+                "2026-04-01 13:05:00",
+                "2026-04-01 14:05:00",
+                "2026-04-01 14:30:00",
+                "2026-04-01 14:55:00",
+            ]),
+            "open": [10.0] * 5,
+            "close": [10.0] * 5,
+            "high": [10.0, 10.0, 12.0, 11.0, 11.0],
+            "low": [9.8] * 5,
+            "volume": [1000] * 5,
+            "turnover": [10000] * 5,
+        })
+
+        metrics = compute_s2_metrics(df)
+
+        assert metrics["intraday_high"] == pytest.approx(12.0)
+        assert metrics["broke_high"] is False
+
+    def test_late_volume_ratio_uses_latest_late_bar(self):
+        """回测S2量比口径应与实盘一致：最新尾盘bar / 13:00-14:30均bar"""
+        df = pd.DataFrame({
+            "time": pd.to_datetime([
+                "2026-04-01 13:05:00",
+                "2026-04-01 13:10:00",
+                "2026-04-01 14:30:00",
+                "2026-04-01 14:55:00",
+            ]),
+            "open": [10.0] * 4,
+            "close": [10.0] * 4,
+            "high": [10.1] * 4,
+            "low": [9.9] * 4,
+            "volume": [1000, 1000, 1000, 3000],
+            "turnover": [10000, 10000, 10000, 30000],
+        })
+
+        metrics = compute_s2_metrics(df)
+
+        assert metrics["late_volume_ratio"] == pytest.approx(3.0)
 
 
 # ================================================================

@@ -227,6 +227,20 @@ class TestComputeLateMetrics:
         m = KlineProvider.compute_late_metrics(df)
         assert m["broke_high"] is False
 
+    def test_1400_to_1425_high_counts_as_pre_late_high(self):
+        """14:00-14:25 的高点应计入14:30前高点，避免误判突破"""
+        times = make_trading_5min_timestamps()
+        closes = [10.0] * 48
+        highs = [10.0] * 48
+        highs[36] = 12.0  # 14:05
+        highs[42] = 11.0  # 14:35，低于14:05高点
+        df = make_5min_df(times, closes, highs=highs)
+
+        m = KlineProvider.compute_late_metrics(df)
+
+        assert m["intraday_high"] == pytest.approx(12.0)
+        assert m["broke_high"] is False
+
     def test_empty_dataframe(self):
         m = KlineProvider.compute_late_metrics(pd.DataFrame())
         assert m == _empty_late_metrics()

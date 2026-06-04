@@ -453,9 +453,10 @@ class KlineProvider:
                 return _empty_late_metrics()
 
         # 上午 (9:30-11:30) vs 尾盘前 (13:00-14:30) vs 尾盘 (14:30-15:00)
-        morning_mask = df["_t"].dt.hour < 12
-        afternoon_mask = df["_t"].dt.hour >= 13
-        late_mask = (df["_t"].dt.hour >= 14) & (df["_t"].dt.minute >= 30)
+        minute_of_day = df["_t"].dt.hour * 60 + df["_t"].dt.minute
+        morning_mask = minute_of_day < 12 * 60
+        afternoon_mask = minute_of_day >= 13 * 60
+        late_mask = minute_of_day >= 14 * 60 + 30
         pre_late_mask = afternoon_mask & ~late_mask  # 13:00-14:30
 
         # 成交量: 优先 turnover (成交额), 其次 volume
@@ -482,7 +483,7 @@ class KlineProvider:
         late_volume_ratio = latest_late_bar_vol / max(pre_late_rate, 1.0)
 
         # 14:30 价格
-        bar_1430 = df[(df["_t"].dt.hour == 14) & (df["_t"].dt.minute == 30)]
+        bar_1430 = df[minute_of_day == 14 * 60 + 30]
         if not bar_1430.empty:
             price_at_1430 = float(bar_1430.iloc[0]["close"])
         elif late_mask.any():
@@ -504,8 +505,8 @@ class KlineProvider:
         last_5min_raw_vol = float(df.loc[last_5min_mask, raw_vol_col].sum()) if raw_vol_col in df.columns else 0.0
 
         # 突破日内高点
-        pre_1430 = df[df["_t"].dt.hour < 14]
-        after_1430 = df[(df["_t"].dt.hour >= 14) & (df["_t"].dt.minute >= 30)]
+        pre_1430 = df[minute_of_day < 14 * 60 + 30]
+        after_1430 = df[minute_of_day >= 14 * 60 + 30]
         pre_1430_high = float(pre_1430["high"].max()) if not pre_1430.empty else float(df["high"].max())
         after_1430_high = float(after_1430["high"].max()) if not after_1430.empty else 0.0
         intraday_high = max(pre_1430_high, after_1430_high)

@@ -192,14 +192,33 @@ def _debounce(today_regime: str) -> str:
         return today_regime
 
     # bull ↔ bear 需要连续2天确认, 暂维持昨日
+    pending_regime = prev.get("pending_regime")
+    pending_days = prev.get("pending_days", 0)
+    if pending_regime == today_regime:
+        pending_days += 1
+    else:
+        pending_regime = today_regime
+        pending_days = 1
+
+    if pending_days >= 2:
+        new_state = {
+            "regime": today_regime,
+            "last_change": datetime.now().strftime("%Y-%m-%d"),
+            "consecutive_days": 1,
+        }
+        _save_regime(new_state)
+        return today_regime
+
     logger.info(
         f"市场状态防抖: 今日={today_regime}, 昨日={prev_regime}({prev_days}天), "
-        f"维持={prev_regime}"
+        f"待确认={pending_regime}({pending_days}/2), 维持={prev_regime}"
     )
     new_state = {
         "regime": prev_regime,
         "last_change": prev.get("last_change", ""),
         "consecutive_days": prev_days,
+        "pending_regime": pending_regime,
+        "pending_days": pending_days,
     }
     _save_regime(new_state)
     return prev_regime
