@@ -3,4 +3,6 @@ reports/
 data/kline_cache/
 backtest_cache/
 backtest_reports/
+.env
+live_snapshots/
 .claude/settings.local.json
