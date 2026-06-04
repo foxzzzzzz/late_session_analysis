@@ -1083,6 +1083,23 @@ class LateSessionPipeline:
                 1 for r in llm_results.values()
                 if r.get('decision') == 'buy'
             )
+
+            # 对失败的标的重试一次LLM分析
+            failed_codes = [code for code, r in llm_results.items() if r.get('fallback', False)]
+            if failed_codes:
+                failed_ctxs = [ctx for ctx in top30 if ctx.code in failed_codes]
+                logger.info(f"LLM重试: {len(failed_ctxs)} 只失败标的 ({', '.join(failed_codes)})")
+                retry_results = self.llm_runner.analyze_batch(failed_ctxs)
+                llm_results.update(retry_results)
+                self.tracker.llm_success = sum(
+                    1 for r in llm_results.values()
+                    if not r.get('fallback', False)
+                )
+                self.tracker.llm_buy_signals = sum(
+                    1 for r in llm_results.values()
+                    if r.get('decision') == 'buy'
+                )
+
             self._llm_results = llm_results
 
         capital_ok = (self.capital_data_date == 'today')
