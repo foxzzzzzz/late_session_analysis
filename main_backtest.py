@@ -83,8 +83,15 @@ def parse_args():
     parser.add_argument('--no-5min', action='store_true',
                         help='禁用5分钟线精确数据，使用近似公式')
     parser.add_argument('--capital-flow-mode', type=str, default='',
-                        choices=['none', 'estimated'],
-                        help='资金流模式: none=停用, estimated=估算 (默认 none)')
+                        choices=['none', 'proxy', 'replay'],
+                        help='资金流模式: none=停用, proxy=5分钟量价估算, replay=实盘快照回放')
+    parser.add_argument('--backtest-type', type=str, default='',
+                        choices=['historical', 'live_replay'],
+                        help='回测口径: historical=历史近似, live_replay=实盘快照回放')
+    parser.add_argument('--decision-time', type=str, default='',
+                        help='实盘可见性截断时间 HH:MM, 例如 14:57')
+    parser.add_argument('--live-snapshot-dir', type=str, default='',
+                        help='live_replay 使用的实盘快照目录')
     parser.add_argument('--sectors', type=str, default='',
                         help='覆盖 TARGET_SECTORS，逗号分隔，如: 半导体,电子元件')
     parser.add_argument('--max-positions', type=int, default=0,
@@ -123,6 +130,12 @@ def main():
         config.use_5min_data = False
     if args.capital_flow_mode:
         config.capital_flow_mode = args.capital_flow_mode
+    if args.backtest_type:
+        config.backtest_type = args.backtest_type
+    if args.decision_time:
+        config.decision_time = args.decision_time
+    if args.live_snapshot_dir:
+        config.live_snapshot_dir = args.live_snapshot_dir
     if args.sectors:
         config.target_sectors = [s.strip() for s in args.sectors.split(',') if s.strip()]
     if args.max_positions > 0:
@@ -147,6 +160,8 @@ def main():
     print(f"  数据源: baostock (日线+5分钟线)")
     print(f"  市场状态: {config.regime_mode}")
     print(f"  5分钟线: {'启用' if config.use_5min_data else '禁用(近似)'}")
+    print(f"  回测口径: {'live_replay_backtest' if config.backtest_type == 'live_replay' else 'historical_backtest'}")
+    print(f"  决策截断: {config.decision_time}")
     print(f"  资金流: {config.capital_flow_mode} (历史数据不可用)")
     print(f"  LLM: 不可用 (纯规则评分)")
     print(f"  滑点: {config.slippage_bps}bps  佣金: {config.commission_rate*100:.3f}%")

@@ -220,6 +220,28 @@ class TestCutoff1459:
 
         assert len(df_cut) == 3
 
+    def test_decision_time_cutoff_excludes_later_visible_bars(self):
+        """配置 decision_time=14:55 时, 14:55 之后的bar不能进入S2回测"""
+        config = BacktestConfig()
+        config.decision_time = "14:55"
+        engine = BacktestEngine(config)
+
+        cutoff = engine._decision_cutoff("20260401")
+        df = pd.DataFrame({
+            "time": pd.to_datetime([
+                "2026-04-01 14:50:00",
+                "2026-04-01 14:55:00",
+                "2026-04-01 15:00:00",
+            ]),
+            "open": [10.0, 10.1, 10.2],
+            "close": [10.1, 10.2, 10.3],
+        })
+
+        df_cut = df[pd.to_datetime(df["time"]) <= cutoff]
+
+        assert len(df_cut) == 2
+        assert str(cutoff) == "2026-04-01 14:55:00"
+
 
 class TestBacktestS2Metrics:
     def test_1400_to_1425_high_counts_as_pre_late_high(self):
@@ -265,6 +287,38 @@ class TestBacktestS2Metrics:
         metrics = compute_s2_metrics(df)
 
         assert metrics["late_volume_ratio"] == pytest.approx(3.0)
+
+
+class TestBacktestModes:
+    def test_backtest_config_accepts_new_modes(self):
+        config = BacktestConfig()
+        config.backtest_type = "live_replay"
+        config.capital_flow_mode = "replay"
+        config.live_snapshot_dir = "./snapshots"
+
+        assert config.backtest_type == "live_replay"
+        assert config.capital_flow_mode == "replay"
+        assert config.live_snapshot_dir == "./snapshots"
+
+    def test_proxy_capital_flow_marks_context_as_proxy(self):
+        config = BacktestConfig()
+        config.capital_flow_mode = "proxy"
+        engine = BacktestEngine(config)
+        ctx = StockContext(
+            code="000001",
+            name="测试",
+            turnover=100_000_000,
+            late_volume_ratio=2.0,
+            late_price_change=1.5,
+        )
+
+        engine._apply_proxy_capital_flow([ctx])
+
+        assert ctx.big_order_net > 0
+        assert ctx.big_order_ratio > 0
+        assert ctx.active_buy_ratio > 50
+        assert ctx.data_quality_flags["fund_flow_source"] == "proxy"
+        assert ctx.data_quality_flags["fund_flow_is_realtime"] is False
 
 
 # ================================================================

@@ -24,7 +24,7 @@ class BacktestReportGenerator:
 
         # 2. JSON 汇总
         summary_json = os.path.join(output_dir, f"summary_{ts}.json")
-        BacktestReportGenerator._save_summary_json(recorder, metrics, summary_json)
+        BacktestReportGenerator._save_summary_json(recorder, metrics, summary_json, config)
 
         # 3. 月度统计
         monthly_csv = os.path.join(output_dir, f"monthly_{ts}.csv")
@@ -60,11 +60,25 @@ class BacktestReportGenerator:
         logger.info(f"  交易明细: {path} ({len(df)} 笔)")
 
     @staticmethod
-    def _save_summary_json(recorder: TradeLogRecorder, metrics: dict, path: str):
+    def _backtest_label(config) -> str:
+        return (
+            "live_replay_backtest"
+            if getattr(config, "backtest_type", "") == "live_replay"
+            else "historical_backtest"
+        )
+
+    @staticmethod
+    def _save_summary_json(recorder: TradeLogRecorder, metrics: dict, path: str, config=None):
         summary = {
             "backtest_info": {
                 "total_days": recorder.total_days(),
                 "days_with_signals": recorder.days_with_signals(),
+                "backtest_type": (
+                    BacktestReportGenerator._backtest_label(config)
+                    if config else "historical_backtest"
+                ),
+                "decision_time": getattr(config, "decision_time", ""),
+                "capital_flow_mode": getattr(config, "capital_flow_mode", ""),
             },
             "performance": metrics,
             "stratified": BacktestReportGenerator._stratified(recorder),
@@ -104,6 +118,9 @@ class BacktestReportGenerator:
         lines = [
             "# 尾盘策略回测报告",
             "",
+            f"**Backtest Type**: {BacktestReportGenerator._backtest_label(config)}",
+            f"**Decision Time**: {getattr(config, 'decision_time', '')}",
+            f"**Capital Flow Mode**: {getattr(config, 'capital_flow_mode', '')}",
             f"**回测区间**: {config.start_date} → {config.end_date}",
             f"**股票池**: {len(config.target_sectors)} 个固定板块 ({', '.join(config.target_sectors)})",
             f"**候选股数**: ~{recorder.total_days()} 天",

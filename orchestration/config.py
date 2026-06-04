@@ -119,6 +119,8 @@ class SystemConfig:
     # === 报告 ===
     report_output_dir: str = "./reports"
     enable_md_to_image: bool = False
+    enable_live_snapshots: bool = True
+    live_snapshot_dir: str = "./live_snapshots"
 
     # === 并行 ===
     max_data_workers: int = 3
@@ -220,6 +222,10 @@ class SystemConfig:
         report_dir = os.getenv("REPORT_OUTPUT_DIR", "")
         if report_dir:
             self.report_output_dir = report_dir
+        self.enable_live_snapshots = os.getenv(
+            "ENABLE_LIVE_SNAPSHOTS", str(self.enable_live_snapshots)
+        ).lower() != "false"
+        self.live_snapshot_dir = os.getenv("LIVE_SNAPSHOT_DIR", self.live_snapshot_dir)
 
         self.enable_northbound = os.getenv("ENABLE_NORTHBOUND", "true").lower() != "false"
         self.max_capital_enrich = int(os.getenv("MAX_CAPITAL_ENRICH", str(self.max_capital_enrich)))

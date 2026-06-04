@@ -10,6 +10,7 @@
 import time
 import logging
 from datetime import datetime, timedelta
+from dataclasses import asdict, is_dataclass
 from typing import Optional
 
 from data_provider.base import RealtimeQuote
@@ -92,6 +93,14 @@ class LateSessionPipeline:
 
         # 资金流向数据日期 (today/yesterday/none)
         self.capital_data_date: str = "none"
+
+        self._snapshot_store = None
+        if getattr(config, "enable_live_snapshots", True):
+            try:
+                from data_provider.snapshot_store import SnapshotStore
+                self._snapshot_store = SnapshotStore(config.live_snapshot_dir)
+            except Exception as e:
+                logger.warning(f"Live snapshot store init failed: {e}")
 
         # S0 板块映射 (股票代码 → 板块名)
         self._s0_sector_map: dict[str, str] = {}
@@ -284,6 +293,83 @@ class LateSessionPipeline:
     # ============================================================
     # 数据获取与转换
     # ============================================================
+
+    @staticmethod
+    def _json_safe(value):
+        if is_dataclass(value):
+            return LateSessionPipeline._json_safe(asdict(value))
+        if isinstance(value, dict):
+            return {str(k): LateSessionPipeline._json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [LateSessionPipeline._json_safe(v) for v in value]
+        if hasattr(value, "item"):
+            try:
+                return value.item()
+            except Exception:
+                pass
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
+    @staticmethod
+    def _context_snapshot(ctx: StockContext) -> dict:
+        fields = [
+            "code", "name", "price", "change_pct", "turnover", "turnover_rate",
+            "volume", "high", "low", "open", "pre_close", "limit_up",
+            "limit_down", "sector", "market_cap", "pe_ttm", "pb", "vol_ratio",
+            "amplitude", "bid_vol", "ask_vol", "late_price_change",
+            "late_volume_ratio", "last_5min_volume_pct", "price_at_1430",
+            "intraday_high", "broke_high", "big_order_net", "big_order_ratio",
+            "active_buy_ratio", "late_active_buy_ratio", "anomaly_type",
+            "l1_passed", "kline_passed", "l2_passed", "l3_passed",
+            "total_score", "final_score", "recommendation",
+        ]
+        data = {name: getattr(ctx, name, None) for name in fields}
+        data["data_quality_flags"] = dict(getattr(ctx, "data_quality_flags", {}) or {})
+        return LateSessionPipeline._json_safe(data)
+
+    def _write_stage_snapshot(
+        self,
+        *,
+        stage: str,
+        iteration: int,
+        contexts: list[StockContext],
+        input_codes: list[str] | None = None,
+        passed_contexts: list[StockContext] | None = None,
+        filter_extra: dict | None = None,
+        decision_time: str = "",
+    ):
+        if not self._snapshot_store:
+            return
+        try:
+            passed_contexts = passed_contexts or []
+            codes = input_codes if input_codes is not None else [c.code for c in contexts]
+            passed_codes = [c.code for c in passed_contexts]
+            filter_result = {
+                "input_count": len(codes),
+                "output_count": len(passed_codes),
+                "passed_codes": passed_codes,
+            }
+            if filter_extra:
+                filter_result.update(filter_extra)
+            data_quality = {
+                "data_source": self.fetcher_mgr.get_active_name() if self.fetcher_mgr else "none",
+                "capital_data_date": self.capital_data_date,
+            }
+            self._snapshot_store.write_stage_snapshot(
+                trading_date=datetime.now().strftime("%Y%m%d"),
+                stage=stage,
+                iteration=iteration,
+                codes=list(codes),
+                quotes=[self._context_snapshot(c) for c in contexts],
+                late_metrics=self._json_safe(self._5min_metrics),
+                fund_flow=self._json_safe(getattr(self, "_fund_flow_data", {})),
+                filter_result=self._json_safe(filter_result),
+                data_quality=self._json_safe(data_quality),
+                decision_time=decision_time,
+            )
+        except Exception as e:
+            logger.warning(f"Live snapshot write failed ({stage} round {iteration}): {e}")
 
     def _fetch_and_convert(self, codes: list[str] = None) -> list[StockContext]:
         """拉取数据并转换为StockContext
@@ -632,6 +718,14 @@ class LateSessionPipeline:
             logger.info(f"S1 K线形态通过: {len(contexts)} 只")
             self._log_low_count(contexts, "S1 K线形态")
 
+        self._write_stage_snapshot(
+            stage="S1",
+            iteration=1,
+            contexts=contexts,
+            input_codes=s0_codes or [c.code for c in contexts],
+            passed_contexts=contexts,
+        )
+
         self.tracker.stage_end("S1_K线扫描", len(contexts))
         return contexts
 
@@ -722,6 +816,7 @@ class LateSessionPipeline:
 
             # 最低保障: 通过数不足 min_pass 时，放宽资金条件重筛
             min_pass = self.config.l2_min_pass
+            relaxed_capital = False
             if len(contexts) < min_pass and has_capital and self.funnel.config.l2.require_capital:
                 import dataclasses
                 relaxed = L2Config(**dataclasses.asdict(self.funnel.config.l2))
@@ -738,8 +833,19 @@ class LateSessionPipeline:
                 )
                 logger.info(f"L2 放宽后: {len(contexts)} 只通过")
                 self._log_low_count(contexts, "S2 L2(放宽)")
+                relaxed_capital = True
 
             self.funnel.stats['l2_count'] = len(contexts)
+
+            self._write_stage_snapshot(
+                stage="S2",
+                iteration=iteration,
+                contexts=l2_candidates,
+                input_codes=codes,
+                passed_contexts=contexts,
+                filter_extra={"relaxed_capital": relaxed_capital},
+                decision_time=self.config.s2_window_end,
+            )
 
             logger.info(
                 f"S2 L2通过: {len(contexts)} 只 "
@@ -836,11 +942,23 @@ class LateSessionPipeline:
             sd = sina_data.get(code, {})
             hd = push2his_data.get(code, {})
             hd_today = hd if hd.get("data_date", "") == today_str else {}
+            sources_seen = []
+            if md:
+                sources_seen.append("minute")
+            if sd:
+                sources_seen.append("sina")
+            if hd:
+                sources_seen.append("push2his")
             # 合并: mainForce 优先分钟线 → 新浪 → push2his(仅当日)
             self._fund_flow_data[code] = {
                 "mainForce": md.get("mainForce") or sd.get("mainForce") or hd_today.get("mainForce") or 0,
                 "active_buy_ratio": sd.get("active_buy_ratio") or hd_today.get("active_buy_ratio", 50.0),
                 "data_date": sd.get("data_date") or hd_today.get("data_date") or md.get("data_date", ""),
+                "sources_seen": sources_seen,
+                "fetched_at": datetime.now().isoformat(timespec="seconds"),
+                "is_realtime": any(
+                    d.get("data_date", "") == today_str for d in (md, sd) if d
+                ),
             }
 
         # Sina双时间点差分: 每次刷新后计算最近区间增量并更新基线 (滚动基线，不累积)
@@ -896,6 +1014,22 @@ class LateSessionPipeline:
                 continue
 
             ctx.data_quality_flags['fund_flow'] = True
+            dates = [d.get("data_date", "") for d in (md, sd, hd) if d]
+            source = ctx.data_quality_flags.get('fund_flow_source', 'none')
+            ctx.data_quality_flags['fund_flow_data_date'] = (
+                flow_detail.get("data_date", "")
+                or sd.get("data_date", "")
+                or hd.get("data_date", "")
+            )
+            ctx.data_quality_flags['fund_flow_fetched_at'] = datetime.now().isoformat(timespec="seconds")
+            ctx.data_quality_flags['fund_flow_is_realtime'] = (
+                source in ("minute", "sina") and ctx.data_quality_flags['fund_flow_data_date'] == today_str
+            )
+            ctx.data_quality_flags['fund_flow_sources_seen'] = [
+                name for name, data in (
+                    ("minute", md), ("sina", sd), ("push2his", hd)
+                ) if data
+            ]
             ctx.big_order_net = main_force * 10000
             ctx.big_order_ratio = (
                 abs(ctx.big_order_net) / max(ctx.turnover, 1)
@@ -914,7 +1048,6 @@ class LateSessionPipeline:
                 ctx.late_active_buy_ratio = delta_cache[ctx.code]
 
             # 日期验证: 分钟线或新浪有当日日期即算有效
-            dates = [d.get("data_date", "") for d in (md, sd, hd) if d]
             if any(d == today_str for d in dates):
                 today_count += 1
 
@@ -989,6 +1122,13 @@ class LateSessionPipeline:
             contexts, self.preloader, self.funnel.config.l3
         )
         self.funnel.stats['l3_count'] = len(l3_passed)
+        self._write_stage_snapshot(
+            stage="S3",
+            iteration=1,
+            contexts=contexts,
+            input_codes=codes,
+            passed_contexts=l3_passed,
+        )
         logger.info(f"S3 L3静态验证: {len(contexts)} → {len(l3_passed)} "
                     f"({len(l3_passed) / max(len(contexts), 1) * 100:.1f}%)")
         self._log_low_count(l3_passed, "S3 L3静态")
@@ -1059,6 +1199,14 @@ class LateSessionPipeline:
             set_concept_analyzer(self.concept_analyzer)
             scored = score_l4(l3_passed, self.funnel.config.l4, self.capital_data_date)
             self.funnel.stats['l4_count'] = len(scored)
+            self._write_stage_snapshot(
+                stage="S4",
+                iteration=iteration,
+                contexts=scored,
+                input_codes=codes,
+                passed_contexts=scored,
+                decision_time=self.config.s3_window_end,
+            )
 
             if single_round:
                 break

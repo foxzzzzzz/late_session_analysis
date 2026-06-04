@@ -2,6 +2,7 @@
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -59,6 +60,12 @@ class BacktestEngine:
     def run(self) -> dict:
         """执行回测"""
         t0 = time.time()
+        if self.config.backtest_type == "live_replay":
+            snapshot_dir = Path(self.config.live_snapshot_dir)
+            if not snapshot_dir.exists():
+                raise FileNotFoundError(
+                    f"live_replay snapshots not found: {snapshot_dir}"
+                )
 
         # 1. 加载股票池
         self._init_stock_pool()
@@ -424,6 +431,26 @@ class BacktestEngine:
         passed = [c for c in contexts if c.l1_passed and c.kline_passed]
         return passed
 
+    def _decision_cutoff(self, date_str: str) -> pd.Timestamp:
+        """Return intraday visibility cutoff from BacktestConfig.decision_time."""
+        h, m = map(int, self.config.decision_time.split(":"))
+        return pd.Timestamp(
+            f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} {h:02d}:{m:02d}:00"
+        )
+
+    def _apply_proxy_capital_flow(self, contexts: list):
+        """Estimate fund-flow fields from visible 5-minute price/volume behavior."""
+        for ctx in contexts:
+            strength = max(ctx.late_volume_ratio - 1.0, 0) * max(ctx.late_price_change, 0)
+            if strength <= 0:
+                continue
+            ctx.big_order_net = ctx.turnover * min(strength * 0.01, 0.05)
+            ctx.big_order_ratio = abs(ctx.big_order_net) / max(ctx.turnover, 1)
+            ctx.active_buy_ratio = min(55 + strength * 2, 70)
+            ctx.data_quality_flags["fund_flow"] = True
+            ctx.data_quality_flags["fund_flow_source"] = "proxy"
+            ctx.data_quality_flags["fund_flow_is_realtime"] = False
+
     # ============================================================
     # S2: 尾盘异动 (5分钟线精确)
     # ============================================================
@@ -441,8 +468,8 @@ class BacktestEngine:
         bars_5min = self.loader.load_5min_bars_batch(codes, date_str)
         logger.info(f"[{date_str}] S2: 获取到 {len(bars_5min)} 只5分钟线")
 
-        # 截断到14:59 — 模拟实盘收盘窗口，获取最完整的尾盘数据
-        cutoff = pd.Timestamp(f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 14:59:00")
+        # 截断到决策时点，避免回测看到实盘下单时尚不可见的尾盘数据
+        cutoff = self._decision_cutoff(date_str)
         truncated = {}
         for c, df in bars_5min.items():
             if isinstance(df, pd.DataFrame) and not df.empty:
@@ -474,8 +501,11 @@ class BacktestEngine:
         rebuilt = screen_kline(rebuilt, self.kline_config, daily_cache=daily_upto)
         rebuilt = [c for c in rebuilt if c.l1_passed and c.kline_passed]
 
+        if self.config.capital_flow_mode == "proxy":
+            self._apply_proxy_capital_flow(rebuilt)
+
         # L2 异动检测 (使用精确S2指标)
-        has_capital = (self.config.capital_flow_mode != "none")
+        has_capital = (self.config.capital_flow_mode in ("proxy", "replay"))
         passed = screen_l2_anomaly(
             rebuilt, self.l2_config,
             has_depth_data=False,

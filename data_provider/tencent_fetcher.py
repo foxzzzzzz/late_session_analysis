@@ -2,6 +2,8 @@
 import time
 import logging
 import urllib.request
+import os
+from dataclasses import replace
 from data_provider.base import BaseFetcher, RealtimeQuote
 
 logger = logging.getLogger(__name__)
@@ -9,6 +11,12 @@ logger = logging.getLogger(__name__)
 
 class TencentFetcher(BaseFetcher):
     """腾讯财经行情 (qt.gtimg.cn)，HTTP GET，GBK编码，~分隔88字段"""
+
+    def __init__(self):
+        self.fetch_codes_ttl_seconds = float(
+            os.getenv("TENCENT_FETCH_CODES_TTL_SECONDS", "3")
+        )
+        self._fetch_codes_cache: dict[tuple[str, ...], tuple[float, list[RealtimeQuote]]] = {}
 
     @property
     def name(self) -> str:
@@ -147,6 +155,14 @@ class TencentFetcher(BaseFetcher):
         t0 = time.time()
         all_codes = [str(c).zfill(6) for c in codes]
         all_codes = list(dict.fromkeys(all_codes))
+        cache_key = tuple(sorted(all_codes))
+
+        if self.fetch_codes_ttl_seconds > 0:
+            cached = self._fetch_codes_cache.get(cache_key)
+            if cached:
+                cached_at, cached_quotes = cached
+                if t0 - cached_at <= self.fetch_codes_ttl_seconds:
+                    return [replace(q) for q in cached_quotes]
 
         seen: dict[str, RealtimeQuote] = {}
         batch_size = 50
@@ -164,7 +180,10 @@ class TencentFetcher(BaseFetcher):
         logger.info(
             f"腾讯API(fetch_codes): {len(seen)}/{len(codes)}只 ({elapsed:.1f}s)"
         )
-        return list(seen.values())
+        quotes = list(seen.values())
+        if self.fetch_codes_ttl_seconds > 0:
+            self._fetch_codes_cache[cache_key] = (time.time(), [replace(q) for q in quotes])
+        return quotes
 
     def fetch_depth(self, codes: list[str]) -> dict[str, dict]:
         return {}

@@ -13,6 +13,7 @@ import logging
 import os
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Optional
 
@@ -168,15 +169,30 @@ class KlineProvider:
         """
         result = {}
 
-        for code in codes:
+        def fetch_one(code: str):
             code = str(code).zfill(6)
-            try:
-                df = self._client.bars(symbol=code, frequency=0, offset=bars)
+            last_error = None
+            for attempt in range(2):
+                try:
+                    df = self._client.bars(symbol=code, frequency=0, offset=bars)
+                    if df is not None and not df.empty:
+                        return code, self._normalize_columns(df)
+                    return code, None
+                except Exception as e:
+                    last_error = e
+                    if attempt == 0:
+                        time.sleep(0.05)
+            logger.debug(f"5分钟线获取失败 {code}: {last_error}")
+            return code, None
+
+        unique_codes = list(dict.fromkeys(str(c).zfill(6) for c in codes))
+        max_workers = min(4, max(len(unique_codes), 1))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(fetch_one, code) for code in unique_codes]
+            for future in as_completed(futures):
+                code, df = future.result()
                 if df is not None and not df.empty:
-                    df = self._normalize_columns(df)
                     result[code] = df
-            except Exception as e:
-                logger.debug(f"5分钟线获取失败 {code}: {e}")
 
         if result:
             logger.info(f"5分钟线加载: {len(result)}/{len(codes)} 只")

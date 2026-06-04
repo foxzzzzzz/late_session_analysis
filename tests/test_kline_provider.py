@@ -93,9 +93,33 @@ class TestComputeMA:
         ma5, ma10, ma20, ma30, ma60 = KlineProvider.compute_ma(df)
         assert ma5 == 0.0
 
+
+class TestLoad5MinBatch:
+    def test_load_5min_batch_retries_single_code_failure(self):
+        provider = KlineProvider.__new__(KlineProvider)
+        calls = {"000001": 0, "000002": 0}
+        df = make_5min_df(make_trading_5min_timestamps(n_bars=2), [10.0, 10.1])
+
+        class FakeClient:
+            def bars(self, symbol, frequency, offset):
+                calls[symbol] += 1
+                if symbol == "000001" and calls[symbol] == 1:
+                    raise RuntimeError("temporary failure")
+                return df
+
+        provider._client = FakeClient()
+
+        result = provider.load_5min_batch(["000001", "000002"], bars=2)
+
+        assert set(result) == {"000001", "000002"}
+        assert calls["000001"] == 2
+        assert calls["000002"] == 1
+
     def test_partial_data_ma10_fallback(self):
         """6-9条数据: MA10 fallback到MA5, MA30/MA60 fallback到MA20"""
         closes = [float(c) for c in range(1, 8)]  # 7条
+        df = make_daily_df(closes)
+        ma5, ma10, ma20, ma30, ma60 = KlineProvider.compute_ma(df)
         df = make_daily_df(closes)
         ma5, ma10, ma20, ma30, ma60 = KlineProvider.compute_ma(df)
         assert ma5 == pytest.approx(5.0)    # (3+4+5+6+7)/5

@@ -45,11 +45,12 @@ def pipeline():
     """构建测试用 Pipeline, mock 所有外部依赖"""
     config = SystemConfig(enable_capital_flow=False)
 
-    with patch.object(LateSessionPipeline, '_init_fetchers', return_value=MagicMock()):
-        with patch('orchestration.pipeline.DataPreloader', return_value=MagicMock()):
-            with patch('orchestration.pipeline.NewsFetcher', return_value=MagicMock()):
-                with patch('orchestration.pipeline.get_concept_analyzer', return_value=MagicMock()):
-                    p = LateSessionPipeline(config, test_mode=True)
+    with patch.object(SystemConfig, 'resolve_regime', return_value='neutral'):
+        with patch.object(LateSessionPipeline, '_init_fetchers', return_value=MagicMock()):
+            with patch('orchestration.pipeline.DataPreloader', return_value=MagicMock()):
+                with patch('orchestration.pipeline.NewsFetcher', return_value=MagicMock()):
+                    with patch('orchestration.pipeline.get_concept_analyzer', return_value=MagicMock()):
+                        p = LateSessionPipeline(config, test_mode=True)
 
     p.tracker = MagicMock()
     p.funnel = MagicMock()
@@ -68,6 +69,7 @@ def pipeline():
     p._flow_minute = None
     p._flow_sina = None
     p._flow_push2his = None
+    p._time_window_active = MagicMock(return_value=True)
     return p
 
 

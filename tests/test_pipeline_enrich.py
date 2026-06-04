@@ -30,11 +30,16 @@ def make_ctx(code="000001", **kwargs):
 def pipeline():
     """构建 pipeline, mock 所有构造依赖"""
     config = SystemConfig(enable_capital_flow=False)
-    with patch.object(LateSessionPipeline, '_init_fetchers', return_value=MagicMock()):
-        with patch('orchestration.pipeline.DataPreloader', return_value=MagicMock()):
-            with patch('orchestration.pipeline.NewsFetcher', return_value=MagicMock()):
-                with patch('orchestration.pipeline.get_concept_analyzer', return_value=MagicMock()):
-                    p = LateSessionPipeline(config, test_mode=True)
+    fake_preloader = MagicMock()
+    fake_preloader.unlock_stocks = set()
+    fake_preloader.hot_concepts = {}
+    fake_preloader.get_sector_performance.return_value = 0.0
+    with patch.object(SystemConfig, 'resolve_regime', return_value='neutral'):
+        with patch.object(LateSessionPipeline, '_init_fetchers', return_value=MagicMock()):
+            with patch('orchestration.pipeline.DataPreloader', return_value=fake_preloader):
+                with patch('orchestration.pipeline.NewsFetcher', return_value=MagicMock()):
+                    with patch('orchestration.pipeline.get_concept_analyzer', return_value=MagicMock()):
+                        p = LateSessionPipeline(config, test_mode=True)
     p.tracker = MagicMock()
     p.funnel = MagicMock()
     p.fetcher_mgr = MagicMock()

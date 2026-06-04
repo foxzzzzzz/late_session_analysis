@@ -384,7 +384,7 @@ S4 融合评分 (~14:57, 单次执行)
 
 ### 回测专用阈值
 
-> 回测使用收盘快照做**单次判断**（非循环扫描），默认阈值比实盘宽松。
+> 回测分为两种口径：`historical_backtest` 使用历史数据近似回放，用于规则初筛和参数方向；`live_replay_backtest` 使用实盘阶段快照回放，用于验证真实上线表现。
 > 可通过 `BT_*` 环境变量独立调整，不影响实盘管线。
 
 **L2 尾盘异动**
@@ -401,7 +401,7 @@ S4 融合评分 (~14:57, 单次执行)
 | `BT_L2_ACTIVE_BUY_PCT` | 主动买入占比% | `55.0` | 55.0 |
 | `BT_L2_MIN_PASS` | L2 最低通过数，不足时放宽资金条件 | `10` | 10 |
 
-> 回测硬编码 `require_capital=False`（资金流数据不可用），`BT_L2_MIN_PASS` 最低保障机制已内置但通常不触发。
+> 回测资金流由 `BT_CAPITAL_FLOW_MODE` 控制：`none`=纯量价，`proxy`=用5分钟量价估算资金强度，`replay`=使用实盘快照资金流。历史近似回测建议用 `proxy`，实盘快照回放使用 `replay`。
 
 **K线形态 (S1)**
 
@@ -448,6 +448,8 @@ S4 融合评分 (~14:57, 单次执行)
 | `ENABLE_NORTHBOUND` | 北向资金情绪 | `true` |
 | `MAX_CAPITAL_ENRICH` | 资金流向最大请求数 | `300` |
 | `REPORT_OUTPUT_DIR` | 报告输出目录 | `./reports` |
+| `ENABLE_LIVE_SNAPSHOTS` | 实盘阶段快照落盘，用于后续 live replay | `true` |
+| `LIVE_SNAPSHOT_DIR` | 实盘快照目录 | `./live_snapshots` |
 
 ## 运行测试
 
@@ -463,14 +465,26 @@ pytest tests/test_layer1_access.py -v
 
 基于历史数据 + 5分钟K线精确计算的策略回测验证系统。复用实盘管线 S1→S2→S3→S4 筛选逻辑，用固定板块股票池替代全市场扫描，T+1 开盘卖出模拟。
 
+回测报告会区分两类口径：
+
+| 口径 | 用途 | 数据来源 |
+|------|------|----------|
+| `historical_backtest` | 历史近似回测，用于规则初筛和参数大方向 | 历史日线/5分钟线 + 可选 proxy 资金流 |
+| `live_replay_backtest` | 实盘快照回放，用于验证真实上线表现 | `live_snapshots/YYYYMMDD/S1-S4/*.jsonl` |
+
+> `live_replay_backtest` 的有效起点是开始沉淀实盘快照的交易日；没有快照的历史日期只能使用 `historical_backtest`。
+
 ### 快速开始
 
 ```bash
 # 默认日期区间 (.env 中 BT_START_DATE → BT_END_DATE)
 python main_backtest.py
 
-# 指定区间
-python main_backtest.py --start 20260401 --end 20260515
+# 历史近似回测：建议用 proxy 资金流，按决策时间截断5分钟线
+python main_backtest.py --backtest-type historical --start 20260401 --end 20260515 --capital-flow-mode proxy --decision-time 14:57
+
+# 实盘快照回放：仅适用于已有 live_snapshots 的日期
+python main_backtest.py --backtest-type live_replay --start 20260604 --end 20260630 --capital-flow-mode replay --live-snapshot-dir ./live_snapshots --decision-time 14:57
 
 # 自定义板块 + 强制刷新缓存
 python main_backtest.py --sectors 半导体,电子元件 --no-cache
@@ -492,7 +506,10 @@ python main_backtest.py -v
 | `--cache-dir` | 数据缓存目录 | `./backtest_cache` |
 | `--no-cache` | 禁用缓存，强制重新拉取 | false |
 | `--no-5min` | 禁用5分钟线，使用近似公式 | false |
-| `--capital-flow-mode` | 资金流模式: `none` / `estimated` | `none` |
+| `--backtest-type` | 回测口径: `historical` / `live_replay` | `historical` |
+| `--decision-time` | 实盘可见性截断时间 HH:MM | `14:57` |
+| `--live-snapshot-dir` | live replay 使用的实盘快照目录 | `./live_snapshots` |
+| `--capital-flow-mode` | 资金流模式: `none` / `proxy` / `replay` | `none` |
 | `--sectors` | 覆盖 TARGET_SECTORS (逗号分隔) | `.env` 配置 |
 | `--max-positions` | 每日最大持仓数 | 5 |
 | `--slippage` | 滑点 (bps) | 5.0 |
@@ -517,9 +534,9 @@ python main_backtest.py -v
 |------|----------|----------|
 | 股票池 | S0 .env TARGET_SECTORS 直接匹配 | 固定板块成分股 (~400-550只) |
 | S1 K线形态 | mootdx TCP 日线 (8项R1+6项R2) | baostock 日线 (同参数，BT_KLINE_* 可独立调参) |
-| S2 尾盘指标 | mootdx TCP 5分钟线 (实时) | baostock 5分钟线 (历史, 24/7可用, compute_s2_metrics) |
-| S2 量价快照 | Tencent 实时快照 (14:50状态) | baostock 日线收盘快照 (全日终值) |
-| 资金流向 | 新浪MoneyFlow + 东财降级 (真实) | **5分钟K线方向×成交额估算** (synthetic_data.py) |
+| S2 尾盘指标 | mootdx TCP 5分钟线 (实时) | historical: baostock 5分钟线按 `--decision-time` 截断；live_replay: 实盘快照 |
+| S2 量价快照 | Tencent 实时快照 (短TTL缓存) | historical: baostock 日线收盘快照；live_replay: 实盘 quote 快照 |
+| 资金流向 | 新浪MoneyFlow + 东财降级，记录 data_date/source/fetched_at/is_realtime | historical: `none`/`proxy`；live_replay: `replay` 快照资金流 |
 | PE/PB/市值 | Tencent 实时 | **不可用** (baostock 日线不含估值字段) |
 | 盘口挂单 | Tencent 5档买卖盘 (真实bid/ask) | **末bar收盘位置估算** (synthetic_data.py) |
 | 北向情绪 | 同花顺 hsgtApi 实时 | akshare 历史日度汇总 (中性分50, 无区分度) |

@@ -24,7 +24,12 @@ class BacktestConfig(SystemConfig):
     max_5min_workers: int = 3
     rate_limit_per_sec: float = 2.0
 
-    # 资金流模式: "none" | "estimated"
+    # 回测口径: historical=历史近似, live_replay=实盘快照回放
+    backtest_type: str = "historical"
+    decision_time: str = "14:57"
+    live_snapshot_dir: str = "./live_snapshots"
+
+    # 资金流模式: "none" | "proxy" | "replay"
     capital_flow_mode: str = "none"
 
     # 退出模拟
@@ -54,6 +59,9 @@ class BacktestConfig(SystemConfig):
         self.cache_dir = os.getenv("BT_CACHE_DIR", self.cache_dir)
         self.no_cache = os.getenv("BT_NO_CACHE", "").lower() in ("true", "1", "yes")
         self.use_5min_data = os.getenv("BT_USE_5MIN", str(self.use_5min_data)).lower() in ("true", "1", "yes")
+        self.backtest_type = os.getenv("BT_BACKTEST_TYPE", self.backtest_type)
+        self.decision_time = os.getenv("BT_DECISION_TIME", self.decision_time)
+        self.live_snapshot_dir = os.getenv("BT_LIVE_SNAPSHOT_DIR", self.live_snapshot_dir)
         self.capital_flow_mode = os.getenv("BT_CAPITAL_FLOW_MODE", self.capital_flow_mode)
         self.slippage_bps = float(os.getenv("BT_SLIPPAGE_BPS", str(self.slippage_bps)))
         self.commission_rate = float(os.getenv("BT_COMMISSION_RATE", str(self.commission_rate)))
