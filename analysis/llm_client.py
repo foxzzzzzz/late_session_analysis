@@ -1,6 +1,7 @@
 """LLM客户端 — LiteLLM统一接口封装，参考DSA + RD-Agent"""
 import os
 import time
+import random
 import logging
 from typing import Optional
 
@@ -31,7 +32,7 @@ class LLMClient:
         self._model_id = f"{self.provider}/{self.model}"
 
     def chat(self, system_prompt: str, user_prompt: str, max_retries: int = 2) -> Optional[str]:
-        """发送聊天请求，空响应时自动重试"""
+        """发送聊天请求，空响应/失败时指数退避重试"""
         import litellm
         litellm.suppress_debug_info = True
 
@@ -48,6 +49,7 @@ class LLMClient:
                     "max_tokens": self.max_tokens,
                     "temperature": self.temperature,
                     "timeout": self.timeout,
+                    "response_format": {"type": "json_object"},
                 }
                 if self.api_key:
                     kwargs["api_key"] = self.api_key
@@ -55,24 +57,33 @@ class LLMClient:
                     kwargs["api_base"] = self.api_base
 
                 response = litellm.completion(**kwargs)
-                content = response.choices[0].message.content
+                msg = response.choices[0].message
+                content = msg.content
+
+                # v4-pro 可能把内容放在 reasoning_content 字段
+                if not content:
+                    content = getattr(msg, "reasoning_content", None)
+
                 if content and content.strip():
                     return content.strip()
 
                 if attempt < max_retries:
+                    delay = (2 ** attempt) + random.uniform(0, 1)
                     logger.warning(
-                        f"LLM返回空内容，重试 {attempt + 1}/{max_retries} "
+                        f"LLM返回空内容 (finish_reason={response.choices[0].finish_reason}), "
+                        f"退避 {delay:.1f}s 后重试 {attempt + 1}/{max_retries} "
                         f"({self._model_id})"
                     )
-                    time.sleep(1.0)
+                    time.sleep(delay)
 
             except Exception as e:
                 if attempt < max_retries:
+                    delay = (2 ** attempt) + random.uniform(0, 1)
                     logger.warning(
-                        f"LLM调用失败，重试 {attempt + 1}/{max_retries} "
+                        f"LLM调用失败，退避 {delay:.1f}s 后重试 {attempt + 1}/{max_retries} "
                         f"({self._model_id}): {e}"
                     )
-                    time.sleep(1.0)
+                    time.sleep(delay)
                 else:
                     logger.error(f"LLM调用失败 ({self._model_id}): {e}")
 
