@@ -383,9 +383,9 @@ class SystemConfig:
                 "l3_min_history_win": 30.0,
                 "l3_vol_ratio_max": 2.5,
                 # L4: 降低推荐阈值 (熊市分数天然低, 需降门槛保证推荐输出)
-                "l4_high_threshold": 78.0,
-                "l4_buy_threshold": 68.0,
-                "l4_medium_threshold": 52.0,
+                "l4_high_threshold": 72.0,
+                "l4_buy_threshold": 62.0,
+                "l4_medium_threshold": 48.0,
             },
         }
 
