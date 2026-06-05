@@ -133,24 +133,45 @@ class PipelineService:
         stages = {}
         if hasattr(pipeline, "tracker") and pipeline.tracker:
             tracker = pipeline.tracker
-            for s in ["S0", "S1", "S2", "S3", "S4"]:
-                stages[s] = getattr(tracker, f"{s.lower()}_pass", 0)
+            for stage_name, stage_info in tracker.stages.items():
+                short = stage_name.split("_")[0]  # "S0_板块预筛选" → "S0"
+                stages[short] = stage_info.output_count
 
         # Recommendations from the last S4 run
         recommendations = []
         if hasattr(pipeline, "top30") and pipeline.top30:
-            for ctx in pipeline.top30:
+            self._emit("S4", "INFO", f"=== S4 通过股票详情 (共 {len(pipeline.top30)} 只) ===")
+            for i, ctx in enumerate(pipeline.top30, 1):
                 level = ctx.recommendation or "watch"
+                llm_s = getattr(ctx, "llm_score", 0)
+                final_s = ctx.final_score
+                name = ctx.name
+                code = ctx.code
+                price = ctx.price or 0
+                sector = getattr(ctx, "sector_name", "") or ""
+
+                # Per-dimension scores
+                dim_attrs = {
+                    "A": "score_tail_strength", "B": "score_technical",
+                    "C": "score_capital", "D": "score_ma_system", "E": "score_market_env",
+                }
+                dims = ""
+                rule_s = 0.0
+                for dim, attr in dim_attrs.items():
+                    val = getattr(ctx, attr, 0)
+                    rule_s += val
+                    dims += f" {dim}={val:.0f}"
+
+                self._emit("S4", "INFO",
+                           f"  #{i} {code} {name} | 价格={price:.2f} | "
+                           f"综合={final_s:.1f} (规则={rule_s:.1f} LLM={llm_s:.1f}) | "
+                           f"等级={level} | 板块={sector}{dims}")
+
                 if level in ("strong_buy", "buy", "watch"):
                     recommendations.append({
-                        "code": ctx.code,
-                        "name": ctx.name,
-                        "level": level,
-                        "final_score": ctx.final_score,
-                        "rule_score": getattr(ctx, "rule_score", 0),
-                        "llm_score": getattr(ctx, "llm_score", 0),
-                        "sector": getattr(ctx, "sector_name", "") or "",
-                        "entry_price": ctx.price or 0,
+                        "code": code, "name": name, "level": level,
+                        "final_score": final_s, "rule_score": rule_s, "llm_score": llm_s,
+                        "sector": sector, "entry_price": price,
                     })
 
         self._emit("SYS", "INFO",

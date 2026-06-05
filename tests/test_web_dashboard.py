@@ -1,6 +1,6 @@
 import json
 from dataclasses import fields
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -243,3 +243,69 @@ def test_pipeline_route_allows_rerun_after_failed_same_day(tmp_path, monkeypatch
 
     assert resp.status_code == 200
     assert resp.get_json()["status"] == "ok"
+
+
+def test_pipeline_thread_persists_startup_log(tmp_path, monkeypatch):
+    app = make_web_app(tmp_path, monkeypatch)
+
+    from web.models import db, PipelineRun, PipelineLog
+    from web.routes.pipeline import _run_pipeline_in_thread
+
+    class FakeService:
+        def __init__(self, log_callback=None):
+            self.log_callback = log_callback
+
+        def run(self, test_mode=True):
+            if self.log_callback:
+                self.log_callback("SYS", "INFO", "fake pipeline run")
+            return {"regime": "neutral", "stages": {}, "recommendations": []}
+
+    def fake_save(run_id, results):
+        return None
+
+    monkeypatch.setattr("web.services.pipeline_service.PipelineService", FakeService)
+    monkeypatch.setattr("web.services.pipeline_service.save_pipeline_results", fake_save)
+
+    with app.app_context():
+        run = PipelineRun(trading_date=date.today(), status="running", started_at=datetime.now())
+        db.session.add(run)
+        db.session.commit()
+        run_id = run.id
+
+    _run_pipeline_in_thread(app, run_id, test_mode=True)
+
+    with app.app_context():
+        logs = PipelineLog.query.filter_by(run_id=run_id).order_by(PipelineLog.id).all()
+        run = db.session.get(PipelineRun, run_id)
+
+    assert run.status == "completed"
+    assert any("Thread started" in log.message for log in logs)
+    assert any("fake pipeline run" in log.message for log in logs)
+
+
+def test_pipeline_detail_marks_running_run_with_no_logs_as_failed(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEB_PIPELINE_START_TIMEOUT_SECONDS", "1")
+    app = make_web_app(tmp_path, monkeypatch)
+
+    from web.models import db, PipelineRun, PipelineLog
+
+    with app.app_context():
+        run = PipelineRun(
+            trading_date=date.today(),
+            status="running",
+            started_at=datetime.now() - timedelta(seconds=10),
+        )
+        db.session.add(run)
+        db.session.commit()
+        run_id = run.id
+
+    with app.test_client() as client:
+        resp = client.get(f"/pipeline/{run_id}")
+
+    assert resp.status_code == 200
+    with app.app_context():
+        run = db.session.get(PipelineRun, run_id)
+        logs = PipelineLog.query.filter_by(run_id=run_id).all()
+
+    assert run.status == "failed"
+    assert any("No startup log" in log.message for log in logs)

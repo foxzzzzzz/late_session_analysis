@@ -5,8 +5,11 @@
 <div class="page-header">
     <h1><i class="bi bi-play-circle me-2"></i>管线执行</h1>
     <div class="d-flex gap-2">
-        <button class="btn btn-primary btn-sm" id="run-btn" onclick="triggerPipeline()">
-            <i class="bi bi-play-fill me-1"></i>手动执行 (Test模式)
+        <button class="btn btn-primary btn-sm" id="run-btn-test" onclick="triggerPipeline(true)">
+            <i class="bi bi-play-fill me-1"></i>快速测试 (单轮)
+        </button>
+        <button class="btn btn-outline-danger btn-sm" id="run-btn-full" onclick="triggerPipeline(false)">
+            <i class="bi bi-lightning-fill me-1"></i>完整执行 (多轮循环)
         </button>
     </div>
 </div>
@@ -112,20 +115,27 @@
         terminal.innerHTML = '';
     }
 
-    async function triggerPipeline() {
-        const btn = document.getElementById('run-btn');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>执行中...';
+    let currentMode = null;
+
+    async function triggerPipeline(testMode) {
+        currentMode = testMode;
+        const modeLabel = testMode ? '快速测试(单轮)' : '完整执行(多轮)';
+        const btnTest = document.getElementById('run-btn-test');
+        const btnFull = document.getElementById('run-btn-full');
+        btnTest.disabled = true;
+        btnFull.disabled = true;
+        btnTest.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>';
+        btnFull.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>';
 
         clearTerminal();
-        appendLog('SYS', 'INFO', '正在启动管线...');
+        appendLog('SYS', 'INFO', `正在启动管线 (${modeLabel})...`);
         statusEl.textContent = '启动中...';
 
         try {
             const resp = await fetch('/pipeline/run', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ test_mode: true })
+                body: JSON.stringify({ test_mode: testMode })
             });
             const data = await resp.json();
 
@@ -187,9 +197,12 @@
     }
 
     function resetBtn() {
-        const btn = document.getElementById('run-btn');
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-play-fill me-1"></i>手动执行 (Test模式)';
+        const btnTest = document.getElementById('run-btn-test');
+        const btnFull = document.getElementById('run-btn-full');
+        btnTest.disabled = false;
+        btnFull.disabled = false;
+        btnTest.innerHTML = '<i class="bi bi-play-fill me-1"></i>快速测试 (单轮)';
+        btnFull.innerHTML = '<i class="bi bi-lightning-fill me-1"></i>完整执行 (多轮循环)';
     }
 </script>
 {% endblock %}

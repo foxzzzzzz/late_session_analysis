@@ -110,14 +110,21 @@
 
     <div class="col-lg-3">
         <div class="card h-100">
-            <div class="card-header">下次自动执行</div>
+            <div class="card-header">
+                自动执行
+                {% if stats.scheduler_active %}
+                <span class="status-dot completed ms-1"></span>
+                {% else %}
+                <span class="status-dot failed ms-1"></span>
+                {% endif %}
+            </div>
             <div class="card-body text-center">
                 <div class="countdown" id="next-run-countdown">计算中...</div>
                 <p class="text-muted mt-2 mb-0" style="font-size: 0.8rem;">
-                    <i class="bi bi-alarm me-1"></i>每日 14:29
+                    <i class="bi bi-alarm me-1"></i>下次 {{ stats.scheduler_next_display }}
                 </p>
                 <p class="text-muted mt-1" style="font-size: 0.72rem;">
-                    仅交易日自动触发<br>周末/节假日跳过
+                    {{ '调度器运行中' if stats.scheduler_active else '调度器未启动' }}
                 </p>
             </div>
         </div>

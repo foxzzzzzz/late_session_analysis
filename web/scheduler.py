@@ -118,6 +118,8 @@ def init_scheduler(app: Flask) -> None:
         "cron",
         hour=14,
         minute=29,
+        timezone="Asia/Shanghai",
+        misfire_grace_time=300,  # allow 5 min late
         id="daily_pipeline",
         name="Daily Late Session Pipeline",
         replace_existing=True,
@@ -128,10 +130,13 @@ def init_scheduler(app: Flask) -> None:
         "cron",
         hour=15,
         minute=30,
+        timezone="Asia/Shanghai",
+        misfire_grace_time=300,
         id="daily_pnl_update",
         name="Daily P&L and Tracking Update",
         replace_existing=True,
     )
 
     scheduler.start()
-    app.logger.info("APScheduler started: pipeline at 14:29, P&L update at 15:30")
+    app.logger.info("APScheduler started (Asia/Shanghai): pipeline at 14:29, P&L update at 15:30")
+    app.logger.info(f"Scheduler running: {scheduler.running}, next: {scheduler.get_job('daily_pipeline').next_run_time}")

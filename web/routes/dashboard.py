@@ -1,6 +1,6 @@
 """Dashboard home page."""
 
-from datetime import date
+from datetime import date, datetime, timedelta
 from flask import Blueprint, render_template
 from web.models import db, PipelineRun, DailyRecommendation, SimulatedTrade, BacktestRun
 from web.models import SystemConfig as DbConfig
@@ -26,6 +26,30 @@ def index():
         .order_by(PipelineRun.trading_date.desc())
         .first()
     )
+
+    # ── scheduler status ────────────────────────────────────
+    scheduler_active = False
+    scheduler_next = None
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        import inspect
+        # Check if scheduler was started in this process
+        import sys
+        if "apscheduler" in sys.modules:
+            from apscheduler.schedulers.background import BackgroundScheduler
+            scheduler_active = True
+            # Next fire time (approximate: 14:29 today or tomorrow)
+            now = datetime.now()
+            next_run = now.replace(hour=14, minute=29, second=0, microsecond=0)
+            if next_run <= now:
+                from datetime import timedelta
+                next_run += timedelta(days=1)
+            # Skip weekends
+            while next_run.weekday() >= 5:
+                next_run += timedelta(days=1)
+            scheduler_next = next_run
+    except ImportError:
+        pass
 
     # today's recommendations
     if today_run:
@@ -91,6 +115,9 @@ def index():
         "open_pnl": round(open_pnl, 2),
         "snapshot_days": snapshot_days,
         "snapshot_files": snapshot_files,
+        "scheduler_active": scheduler_active,
+        "scheduler_next": scheduler_next.isoformat() if scheduler_next else "–",
+        "scheduler_next_display": scheduler_next.strftime("%m/%d %H:%M") if scheduler_next else "–",
     }
 
     return render_template("dashboard.html", stats=stats, recent_runs=recent_runs)

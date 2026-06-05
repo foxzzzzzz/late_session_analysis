@@ -1,6 +1,7 @@
 """Pipeline execution page with SSE log streaming."""
 
 import json
+import os
 import queue
 import threading
 from datetime import datetime, date
@@ -11,6 +12,12 @@ bp = Blueprint("pipeline", __name__)
 
 # Thread-safe queue for SSE log streaming
 _log_queues: dict[int, queue.Queue] = {}
+_app_ref = None  # set by create_app()
+
+
+def set_app(app):
+    global _app_ref
+    _app_ref = app
 
 
 def _log_handler(run_id: int, stage: str, level: str, message: str):
@@ -35,42 +42,105 @@ def _log_handler(run_id: int, stage: str, level: str, message: str):
         q.put({"stage": stage, "level": level, "message": message})
 
 
+def _safe_log(app, run_id: int, stage: str, level: str, message: str) -> None:
+    """Persist a pipeline log even from thread startup/error paths."""
+    try:
+        with app.app_context():
+            _log_handler(run_id, stage, level, message)
+    except Exception:
+        q = _log_queues.get(run_id)
+        if q:
+            q.put({"stage": stage, "level": level, "message": message})
+
+
+def _mark_stale_startup_if_needed(run: PipelineRun) -> None:
+    """Fail runs that never emitted a startup log after a short timeout."""
+    if not run or run.status != "running" or not run.started_at:
+        return
+
+    timeout = int(os.getenv("WEB_PIPELINE_START_TIMEOUT_SECONDS", "60"))
+    age = (datetime.now() - run.started_at).total_seconds()
+    if age < timeout:
+        return
+
+    log_count = PipelineLog.query.filter_by(run_id=run.id).count()
+    if log_count > 0:
+        return
+
+    run.status = "failed"
+    run.finished_at = datetime.now()
+    db.session.add(PipelineLog(
+        run_id=run.id,
+        stage="SYS",
+        level="ERROR",
+        message=f"No startup log after {timeout}s; background pipeline thread likely failed to start",
+        timestamp=datetime.now(),
+    ))
+    db.session.commit()
+
+
 def _run_pipeline_in_thread(app, run_id: int, test_mode: bool = True):
     """Execute the real pipeline in a background thread."""
-    from web.services.pipeline_service import PipelineService, save_pipeline_results
+    import traceback as _tb
 
-    def on_log(stage: str, level: str, message: str):
-        _log_handler(run_id, stage, level, message)
+    _safe_log(app, run_id, "SYS", "INFO", "Thread started, entering app context...")
 
-    with app.app_context():
-        service = PipelineService(log_callback=on_log)
+    try:
+        from web.services.pipeline_service import PipelineService, save_pipeline_results
 
+        def on_log(stage: str, level: str, message: str):
+            _log_handler(run_id, stage, level, message)
+
+        with app.app_context():
+            service = PipelineService(log_callback=on_log)
+
+            try:
+                results = service.run(test_mode=test_mode)
+                if results.get("error"):
+                    _log_handler(run_id, "SYS", "ERROR", str(results["error"]))
+                    run = db.session.get(PipelineRun, run_id)
+                    if run:
+                        run.status = "failed"
+                        run.finished_at = datetime.now()
+                        db.session.commit()
+                    return
+                save_pipeline_results(run_id, results)
+
+                run = db.session.get(PipelineRun, run_id)
+                if run:
+                    run.status = "completed"
+                    run.finished_at = datetime.now()
+                    db.session.commit()
+
+            except Exception as e:
+                _log_handler(run_id, "SYS", "ERROR", f"Pipeline crashed: {e}")
+                _log_handler(run_id, "SYS", "ERROR", _tb.format_exc()[-500:])
+                try:
+                    run = db.session.get(PipelineRun, run_id)
+                    if run:
+                        run.status = "failed"
+                        run.finished_at = datetime.now()
+                        db.session.commit()
+                except Exception:
+                    pass
+
+    except Exception as outer_e:
+        _safe_log(app, run_id, "SYS", "ERROR", f"Thread init failed: {outer_e}")
+        _safe_log(app, run_id, "SYS", "ERROR", _tb.format_exc()[-500:])
         try:
-            results = service.run(test_mode=test_mode)
+            with app.app_context():
+                run = db.session.get(PipelineRun, run_id)
+                if run:
+                    run.status = "failed"
+                    run.finished_at = datetime.now()
+                    db.session.commit()
+        except Exception:
+            pass
 
-            # Save results to DB
-            save_pipeline_results(run_id, results)
-
-            # Update run status
-            run = db.session.get(PipelineRun, run_id)
-            if run:
-                run.status = "completed"
-                run.finished_at = datetime.now()
-                db.session.commit()
-
-        except Exception as e:
-            _log_handler(run_id, "SYS", "ERROR", f"Pipeline thread crashed: {e}")
-            import traceback
-            _log_handler(run_id, "SYS", "ERROR", traceback.format_exc()[-300:])
-            run = db.session.get(PipelineRun, run_id)
-            if run:
-                run.status = "failed"
-                run.finished_at = datetime.now()
-                db.session.commit()
-        finally:
-            import time
-            time.sleep(2)
-            _log_queues.pop(run_id, None)
+    finally:
+        import time
+        time.sleep(2)
+        _log_queues.pop(run_id, None)
 
 
 @bp.route("/")
@@ -137,36 +207,118 @@ def run_pipeline():
     db.session.commit()
 
     # Create queue for this run
-    _log_queues[run.id] = queue.Queue()
+    q = queue.Queue()
+    _log_queues[run.id] = q
 
-    # Start background thread with app context
-    app = current_app._get_current_object()
-    thread = threading.Thread(
-        target=_run_pipeline_in_thread,
-        args=(app, run.id, test_mode),
-        daemon=True,
-    )
-    thread.start()
+    # Verify queue works from main thread
+    q.put({"stage": "SYS", "level": "INFO", "message": "Queue initialized"})
+
+    # Pipeline will be executed inline when the SSE stream connects.
+    # We just create the run record and queue — the stream endpoint does the work.
 
     return jsonify({"status": "ok", "run_id": run.id})
 
 
 @bp.route("/stream/<int:run_id>")
 def stream(run_id: int):
-    """SSE endpoint for real-time log streaming."""
+    """SSE endpoint for real-time log streaming — executes pipeline inline."""
     q = _log_queues.get(run_id)
     if q is None:
-        # Fall back to DB for finished runs
         return _stream_from_db(run_id)
+
+    # Check if this is a fresh run that needs execution
+    run = db.session.get(PipelineRun, run_id)
+    if run and run.status in ("running",) and PipelineLog.query.filter_by(run_id=run_id).count() == 0:
+        # Fresh run: execute pipeline inline while streaming
+        return Response(
+            _stream_and_run(run_id, q, run),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+        )
+
     return Response(
         _stream_from_queue(run_id, q),
         mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
+
+
+def _stream_and_run(run_id: int, q: queue.Queue, run: PipelineRun):
+    """Run pipeline in a thread, stream SSE with heartbeat polling."""
+    import traceback as _tb
+    from web.services.pipeline_service import PipelineService, save_pipeline_results
+
+    yield "event: connected\ndata: {}\n\n"
+
+    # The pipeline runs in a thread and pushes to DB+queue via _emit callback.
+    # The SSE generator polls the queue and sends heartbeats.
+    finished = threading.Event()
+
+    def _run():
+        app = current_app._get_current_object()
+        with app.app_context():
+            from web.models import db as _db, PipelineLog as _PL, PipelineRun as _PR
+
+            def _emit(stage: str, level: str, message: str):
+                msg = str(message)[:2000]
+                try:
+                    log = _PL(run_id=run_id, stage=stage, level=level, message=msg, timestamp=datetime.now())
+                    _db.session.add(log)
+                    _db.session.commit()
+                except Exception:
+                    try:
+                        _db.session.rollback()
+                    except Exception:
+                        pass
+                q.put({"stage": stage, "level": level, "message": msg})
+
+            try:
+                service = PipelineService(log_callback=_emit)
+                results = service.run(test_mode=True)
+                save_pipeline_results(run_id, results)
+                run_obj = _db.session.get(_PR, run_id)
+                if run_obj:
+                    run_obj.status = "completed"
+                    run_obj.finished_at = datetime.now()
+                    _db.session.commit()
+            except Exception as e:
+                _emit("SYS", "ERROR", f"Pipeline failed: {e}")
+                _emit("SYS", "ERROR", _tb.format_exc()[-800:])
+                try:
+                    run_obj = _db.session.get(_PR, run_id)
+                    if run_obj:
+                        run_obj.status = "failed"
+                        run_obj.finished_at = datetime.now()
+                        _db.session.commit()
+                except Exception:
+                    pass
+            finally:
+                finished.set()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    # Poll queue + send heartbeats until pipeline finishes
+    while not finished.is_set():
+        try:
+            msg = q.get(timeout=5)
+            payload = json.dumps(msg, ensure_ascii=False)
+            yield f"data: {payload}\n\n"
+        except queue.Empty:
+            yield "event: heartbeat\ndata: {}\n\n"
+
+    # Drain remaining messages
+    while True:
+        try:
+            msg = q.get_nowait()
+            payload = json.dumps(msg, ensure_ascii=False)
+            yield f"data: {payload}\n\n"
+        except queue.Empty:
+            break
+
+    run_obj = db.session.get(PipelineRun, run_id)
+    status = run_obj.status if run_obj else "unknown"
+    yield f"event: done\ndata: {{\"status\": \"{status}\"}}\n\n"
 
 
 def _stream_from_queue(run_id: int, q: queue.Queue):
@@ -179,7 +331,7 @@ def _stream_from_queue(run_id: int, q: queue.Queue):
             yield f"data: {payload}\n\n"
         except queue.Empty:
             # Send heartbeat
-            yield ": heartbeat\n\n"
+            yield "event: heartbeat\ndata: {}\n\n"
             # Check if run is done
             run = db.session.get(PipelineRun, run_id)
             if run and run.status != "running":
@@ -222,6 +374,8 @@ def run_detail(run_id: int):
     run = db.session.get(PipelineRun, run_id)
     if not run:
         return "Not found", 404
+    _mark_stale_startup_if_needed(run)
+    run = db.session.get(PipelineRun, run_id)
 
     logs = (
         PipelineLog.query
