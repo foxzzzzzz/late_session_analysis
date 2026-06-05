@@ -1,7 +1,7 @@
 """Dashboard home page."""
 
 from datetime import date, datetime, timedelta
-from flask import Blueprint, render_template
+from flask import Blueprint, current_app, render_template
 from web.models import db, PipelineRun, DailyRecommendation, SimulatedTrade, BacktestRun
 from web.models import SystemConfig as DbConfig
 
@@ -28,28 +28,23 @@ def index():
     )
 
     # ── scheduler status ────────────────────────────────────
-    scheduler_active = False
-    scheduler_next = None
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-        import inspect
-        # Check if scheduler was started in this process
-        import sys
-        if "apscheduler" in sys.modules:
-            from apscheduler.schedulers.background import BackgroundScheduler
-            scheduler_active = True
-            # Next fire time (approximate: 14:29 today or tomorrow)
-            now = datetime.now()
-            next_run = now.replace(hour=14, minute=29, second=0, microsecond=0)
-            if next_run <= now:
-                from datetime import timedelta
-                next_run += timedelta(days=1)
-            # Skip weekends
-            while next_run.weekday() >= 5:
-                next_run += timedelta(days=1)
-            scheduler_next = next_run
-    except ImportError:
-        pass
+    scheduler_active = bool(current_app.config.get("SCHEDULER_ACTIVE", False))
+    scheduler_next = current_app.config.get("SCHEDULER_NEXT_RUN_TIME")
+    scheduler = current_app.config.get("SCHEDULER")
+    if scheduler:
+        job = scheduler.get_job("daily_pipeline")
+        if job and job.next_run_time:
+            scheduler_next = job.next_run_time
+            current_app.config["SCHEDULER_NEXT_RUN_TIME"] = scheduler_next
+
+    if scheduler_next is None:
+        now = datetime.now()
+        next_run = now.replace(hour=14, minute=29, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        while next_run.weekday() >= 5:
+            next_run += timedelta(days=1)
+        scheduler_next = next_run
 
     # today's recommendations
     if today_run:
@@ -76,7 +71,7 @@ def index():
 
     # live snapshot stats
     from pathlib import Path
-    snapshot_root = Path(_get_config("live_snapshot_dir", "./live_snapshots"))
+    snapshot_root = Path(_get_config("live.live_snapshot_dir", _get_config("live_snapshot_dir", "./live_snapshots")))
     snapshot_days = 0
     snapshot_files = 0
     if snapshot_root.exists():

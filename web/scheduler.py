@@ -10,6 +10,107 @@ from flask import Flask
 logger = logging.getLogger(__name__)
 
 
+def _scheduled_log(run_id: int, stage: str, level: str, message: str) -> None:
+    from web.models import db, PipelineLog
+
+    db.session.add(PipelineLog(
+        run_id=run_id,
+        stage=stage,
+        level=level,
+        message=message,
+        timestamp=datetime.now(),
+    ))
+    db.session.commit()
+
+
+def _prepare_scheduled_run(today: date):
+    from web.models import db, PipelineRun, PipelineLog, DailyRecommendation, SimulatedTrade
+
+    existing = PipelineRun.query.filter_by(trading_date=today).first()
+    if existing and existing.status in ("running", "completed", "pending"):
+        return None, f"Pipeline already ran today ({today}), skipping"
+
+    if existing:
+        old_recs = DailyRecommendation.query.filter_by(run_id=existing.id).all()
+        old_rec_ids = [rec.id for rec in old_recs]
+        if old_rec_ids:
+            SimulatedTrade.query.filter(
+                SimulatedTrade.recommendation_id.in_(old_rec_ids)
+            ).delete(synchronize_session=False)
+        DailyRecommendation.query.filter_by(run_id=existing.id).delete(synchronize_session=False)
+        PipelineLog.query.filter_by(run_id=existing.id).delete(synchronize_session=False)
+        existing.status = "running"
+        existing.started_at = datetime.now()
+        existing.finished_at = None
+        existing.stages_json = None
+        run = existing
+    else:
+        run = PipelineRun(
+            trading_date=today,
+            status="running",
+            started_at=datetime.now(),
+        )
+        db.session.add(run)
+    db.session.commit()
+    return run, ""
+
+
+def _execute_scheduled_pipeline(app: Flask) -> None:
+    """Run the scheduled pipeline once, reusing failed same-day runs."""
+    with app.app_context():
+        from web.models import db, PipelineRun
+        from web.services.pipeline_service import PipelineService, save_pipeline_results
+
+        today = date.today()
+
+        if today.weekday() >= 5:
+            app.logger.info(f"{today} is weekend, skipping pipeline")
+            return
+
+        run, skip_reason = _prepare_scheduled_run(today)
+        if run is None:
+            app.logger.info(skip_reason)
+            return
+
+        _scheduled_log(run.id, "SYS", "INFO", f"Scheduled pipeline starting for {today}")
+        app.logger.info(f"Scheduled pipeline starting for {today}")
+
+        def on_log(stage: str, level: str, message: str):
+            _scheduled_log(run.id, stage, level, message)
+
+        try:
+            service = PipelineService(log_callback=on_log)
+            results = service.run(test_mode=False)
+            if results.get("error"):
+                raise RuntimeError(str(results["error"]))
+
+            save_pipeline_results(run.id, results)
+
+            run = db.session.get(PipelineRun, run.id)
+            if run:
+                run.status = "completed"
+                run.finished_at = datetime.now()
+                db.session.commit()
+
+            app.logger.info(f"Pipeline completed for {today}")
+
+        except Exception as e:
+            import traceback
+
+            app.logger.error(f"Pipeline failed for {today}: {e}")
+            app.logger.error(traceback.format_exc()[-500:])
+            _scheduled_log(run.id, "SYS", "ERROR", f"Scheduled pipeline failed: {e}")
+            _scheduled_log(run.id, "SYS", "ERROR", traceback.format_exc()[-500:])
+            try:
+                run = db.session.get(PipelineRun, run.id)
+                if run:
+                    run.status = "failed"
+                    run.finished_at = datetime.now()
+                    db.session.commit()
+            except Exception:
+                pass
+
+
 def init_scheduler(app: Flask) -> None:
     """Set up APScheduler for daily auto-execution on trading days.
 
@@ -21,12 +122,14 @@ def init_scheduler(app: Flask) -> None:
     Called from app factory after DB is ready.
     """
     if os.getenv("WEB_SCHEDULER_ENABLED", "true").lower() not in ("true", "1", "yes"):
+        app.config["SCHEDULER_ACTIVE"] = False
         app.logger.info("APScheduler disabled by WEB_SCHEDULER_ENABLED")
         return
 
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
     except ImportError:
+        app.config["SCHEDULER_ACTIVE"] = False
         app.logger.warning("APScheduler not installed — daily auto-run disabled")
         return
 
@@ -35,59 +138,7 @@ def init_scheduler(app: Flask) -> None:
     # ── 14:29 Pipeline Job ─────────────────────────────────
 
     def daily_pipeline_job():
-        with app.app_context():
-            from web.models import db, PipelineRun
-            from web.services.pipeline_service import PipelineService, save_pipeline_results
-
-            today = date.today()
-
-            # Check if already run today
-            existing = PipelineRun.query.filter_by(trading_date=today).first()
-            if existing:
-                app.logger.info(f"Pipeline already ran today ({today}), skipping")
-                return
-
-            # Skip weekends
-            if today.weekday() >= 5:
-                app.logger.info(f"{today} is weekend, skipping pipeline")
-                return
-
-            app.logger.info(f"Scheduled pipeline starting for {today}")
-
-            # Create run record
-            run = PipelineRun(
-                trading_date=today,
-                status="running",
-                started_at=datetime.now(),
-            )
-            db.session.add(run)
-            db.session.commit()
-
-            try:
-                service = PipelineService()
-                results = service.run(test_mode=False)
-                save_pipeline_results(run.id, results)
-
-                run = db.session.get(PipelineRun, run.id)
-                if run:
-                    run.status = "completed"
-                    run.finished_at = datetime.now()
-                    db.session.commit()
-
-                app.logger.info(f"Pipeline completed for {today}")
-
-            except Exception as e:
-                app.logger.error(f"Pipeline failed for {today}: {e}")
-                import traceback
-                app.logger.error(traceback.format_exc()[-500:])
-                try:
-                    run = db.session.get(PipelineRun, run.id)
-                    if run:
-                        run.status = "failed"
-                        run.finished_at = datetime.now()
-                        db.session.commit()
-                except Exception:
-                    pass
+        _execute_scheduled_pipeline(app)
 
     # ── 15:30 P&L Update Job ───────────────────────────────
 
@@ -138,5 +189,8 @@ def init_scheduler(app: Flask) -> None:
     )
 
     scheduler.start()
+    app.config["SCHEDULER_ACTIVE"] = True
+    app.config["SCHEDULER"] = scheduler
+    app.config["SCHEDULER_NEXT_RUN_TIME"] = scheduler.get_job("daily_pipeline").next_run_time
     app.logger.info("APScheduler started (Asia/Shanghai): pipeline at 14:29, P&L update at 15:30")
     app.logger.info(f"Scheduler running: {scheduler.running}, next: {scheduler.get_job('daily_pipeline').next_run_time}")

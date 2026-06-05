@@ -104,6 +104,12 @@ body {
 
 /* ── Stat Cards ─────────────────────────────────────────── */
 
+.dashboard-stats {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 1rem;
+}
+
 .stat-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
@@ -143,6 +149,61 @@ body {
 .stat-card.success { border-left: 3px solid var(--success); }
 .stat-card.danger  { border-left: 3px solid var(--danger); }
 .stat-card.accent  { border-left: 3px solid var(--accent); }
+
+.dashboard-side-stack {
+    display: grid;
+    gap: 1rem;
+}
+
+.scheduler-offline {
+    font-family: 'Fira Code', monospace;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+
+.quick-action-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+}
+
+.quick-action {
+    display: flex;
+    min-height: 4.5rem;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.015);
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: all var(--transition);
+}
+
+.quick-action i {
+    font-size: 1.15rem;
+    color: var(--primary);
+}
+
+.quick-action span {
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.quick-action:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+    border-color: var(--border-light);
+    transform: translateY(-1px);
+}
+
+.quick-action.primary {
+    border-color: rgba(59, 130, 246, 0.35);
+    background: rgba(59, 130, 246, 0.08);
+}
 
 /* ── Regime Badge ───────────────────────────────────────── */
 
@@ -430,6 +491,7 @@ body {
 /* ── Responsive ─────────────────────────────────────────── */
 
 @media (max-width: 768px) {
+    .dashboard-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .stat-card .stat-value { font-size: 1.2rem; }
     .config-row {
         grid-template-columns: 1fr;
@@ -439,6 +501,10 @@ body {
     .config-row input { width: 100%; }
     .terminal { font-size: 0.7rem; max-height: 350px; }
     .table { font-size: 0.75rem; }
+}
+
+@media (min-width: 769px) and (max-width: 1199px) {
+    .dashboard-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 /* ── Tabs ───────────────────────────────────────────────── */

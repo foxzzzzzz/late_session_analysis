@@ -157,7 +157,10 @@ def index():
     from pathlib import Path
     from web.models import SystemConfig as DbConfig
 
-    snap_cfg = DbConfig.query.filter_by(key="live_snapshot_dir").first()
+    snap_cfg = (
+        DbConfig.query.filter_by(key="live.live_snapshot_dir").first()
+        or DbConfig.query.filter_by(key="live_snapshot_dir").first()
+    )
     snap_dir = Path(snap_cfg.value if snap_cfg else "./live_snapshots")
     snap_days = 0
     snap_files = 0

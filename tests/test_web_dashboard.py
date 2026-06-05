@@ -309,3 +309,103 @@ def test_pipeline_detail_marks_running_run_with_no_logs_as_failed(tmp_path, monk
 
     assert run.status == "failed"
     assert any("No startup log" in log.message for log in logs)
+
+
+def test_dashboard_renders_balanced_layout(tmp_path, monkeypatch):
+    app = make_web_app(tmp_path, monkeypatch)
+
+    with app.test_client() as client:
+        resp = client.get("/")
+
+    body = resp.get_data(as_text=True)
+    assert resp.status_code == 200
+    assert "dashboard-stats" in body
+    assert "dashboard-side-stack" in body
+    assert "quick-action-grid" in body
+    assert "市场状态" in body
+
+
+def test_pipeline_page_uses_scoped_live_snapshot_dir(tmp_path, monkeypatch):
+    from web.models import db, SystemConfig as DbConfig
+
+    app = make_web_app(tmp_path, monkeypatch)
+
+    scoped_dir = tmp_path / "scoped_snapshots"
+    legacy_dir = tmp_path / "legacy_snapshots"
+    (scoped_dir / "20260605" / "S2").mkdir(parents=True)
+    (scoped_dir / "20260605" / "S2" / "one.jsonl").write_text("{}", encoding="utf-8")
+    (legacy_dir / "20260604" / "S2").mkdir(parents=True)
+    (legacy_dir / "20260604" / "S2" / "old.jsonl").write_text("{}", encoding="utf-8")
+
+    with app.app_context():
+        DbConfig.query.filter_by(key="live.live_snapshot_dir").first().value = str(scoped_dir)
+        db.session.add(DbConfig(
+            key="live_snapshot_dir",
+            value=str(legacy_dir),
+            value_type="str",
+            category="threshold_live",
+            description="legacy",
+        ))
+        db.session.commit()
+
+    with app.test_client() as client:
+        resp = client.get("/pipeline/")
+
+    body = resp.get_data(as_text=True)
+    assert resp.status_code == 200
+    assert str(scoped_dir) in body
+    assert "1</div>" in body
+
+
+def test_dashboard_uses_scheduler_next_run_time_from_app_config(tmp_path, monkeypatch):
+    from datetime import timezone
+
+    app = make_web_app(tmp_path, monkeypatch)
+    next_run = datetime(2026, 6, 9, 14, 29, tzinfo=timezone.utc)
+    app.config["SCHEDULER_ACTIVE"] = True
+    app.config["SCHEDULER_NEXT_RUN_TIME"] = next_run
+
+    with app.test_client() as client:
+        resp = client.get("/")
+
+    body = resp.get_data(as_text=True)
+    assert resp.status_code == 200
+    assert "06/09 14:29" in body
+
+
+def test_scheduler_retries_failed_run_and_persists_logs(tmp_path, monkeypatch):
+    from web.models import db, PipelineRun, PipelineLog
+    from web.scheduler import _execute_scheduled_pipeline
+
+    app = make_web_app(tmp_path, monkeypatch)
+
+    class FakeService:
+        def __init__(self, log_callback=None):
+            self.log_callback = log_callback
+
+        def run(self, test_mode=False):
+            if self.log_callback:
+                self.log_callback("SYS", "INFO", "scheduled fake run")
+            return {"regime": "neutral", "stages": {}, "recommendations": []}
+
+    def fake_save(run_id, results):
+        return None
+
+    monkeypatch.setattr("web.services.pipeline_service.PipelineService", FakeService)
+    monkeypatch.setattr("web.services.pipeline_service.save_pipeline_results", fake_save)
+
+    with app.app_context():
+        failed = PipelineRun(trading_date=date.today(), status="failed", started_at=datetime.now())
+        db.session.add(failed)
+        db.session.commit()
+        run_id = failed.id
+
+        _execute_scheduled_pipeline(app)
+
+        db.session.expire_all()
+        run = db.session.get(PipelineRun, run_id)
+        logs = PipelineLog.query.filter_by(run_id=run_id).all()
+
+    assert run.status == "completed"
+    assert any("Scheduled pipeline starting" in log.message for log in logs)
+    assert any("scheduled fake run" in log.message for log in logs)
