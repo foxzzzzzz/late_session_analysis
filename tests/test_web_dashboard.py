@@ -1,4 +1,5 @@
 import json
+from dataclasses import fields
 from datetime import date
 from pathlib import Path
 
@@ -28,6 +29,113 @@ def test_seed_config_handles_default_factory_values():
     assert json.loads(rows["data_providers"]["value"])[0] == "tencent"
     assert rows["target_sectors"]["value_type"] == "json"
     assert json.loads(rows["target_sectors"]["value"]) == []
+
+
+def test_init_db_backfills_missing_regime_config_without_overwriting(tmp_path, monkeypatch):
+    from web.models import db, SystemConfig as DbConfig
+
+    app = make_web_app(tmp_path, monkeypatch)
+
+    with app.app_context():
+        bull_key = "live.regime.bull.l4_high_threshold"
+        existing = DbConfig.query.filter_by(key=bull_key).first()
+        assert existing is not None
+
+        existing.value = "91.0"
+        DbConfig.query.filter_by(key="live.regime.bear.l4_buy_threshold").delete()
+        db.session.commit()
+
+    restarted = make_web_app(tmp_path, monkeypatch)
+
+    with restarted.app_context():
+        preserved = DbConfig.query.filter_by(key=bull_key).first()
+        backfilled = DbConfig.query.filter_by(key="live.regime.bear.l4_buy_threshold").first()
+
+    assert preserved.value == "91.0"
+    assert backfilled is not None
+    assert backfilled.value == "62.0"
+
+
+def test_web_seed_defaults_match_runtime_live_and_backtest_configs(tmp_path, monkeypatch):
+    from orchestration.config import SystemConfig
+    from backtest.config import BacktestConfig
+    from web.models import SystemConfig as DbConfig
+
+    app = make_web_app(tmp_path, monkeypatch)
+    live = SystemConfig()
+    backtest = BacktestConfig()
+
+    with app.app_context():
+        live_l4 = DbConfig.query.filter_by(key="live.l4_high_threshold").first()
+        bt_l4 = DbConfig.query.filter_by(key="backtest.l4_high_threshold").first()
+        model = DbConfig.query.filter_by(key="llm_model").first()
+        bull_l4 = DbConfig.query.filter_by(key="live.regime.bull.l4_high_threshold").first()
+
+    assert live_l4.value == str(live.l4_high_threshold)
+    assert bt_l4.value == str(backtest.l4_high_threshold)
+    assert live_l4.value != bt_l4.value
+    assert model.value == live.llm_model
+    assert bull_l4.value == str(live._regime_overrides["bull"]["l4_high_threshold"])
+
+
+def test_all_web_seeded_defaults_match_runtime_config_instances(tmp_path, monkeypatch):
+    from orchestration.config import SystemConfig
+    from backtest.config import BacktestConfig
+    from web.models import SystemConfig as DbConfig
+
+    app = make_web_app(tmp_path, monkeypatch)
+    live = SystemConfig()
+    backtest = BacktestConfig()
+
+    api_keys = {"llm_api_key", "llm_api_base", "llm_model"}
+    schedule_keys = {"schedule_enabled", "schedule_time"}
+
+    def expected_string(value):
+        if isinstance(value, bool):
+            return str(value).lower()
+        if isinstance(value, (list, dict)):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value) if value is not None else ""
+
+    with app.app_context():
+        for f in fields(SystemConfig):
+            if f.name.startswith("_"):
+                continue
+            key = f.name if f.name in api_keys or f.name in schedule_keys else f"live.{f.name}"
+            row = DbConfig.query.filter_by(key=key).first()
+            assert row is not None, key
+            assert row.value == expected_string(getattr(live, f.name)), key
+
+        for f in fields(BacktestConfig):
+            if f.name.startswith("_"):
+                continue
+            key = f"backtest.{f.name}"
+            row = DbConfig.query.filter_by(key=key).first()
+            assert row is not None, key
+            assert row.value == expected_string(getattr(backtest, f.name)), key
+
+
+def test_config_page_hides_shadowed_legacy_threshold_keys(tmp_path, monkeypatch):
+    from web.models import db, SystemConfig as DbConfig
+    from web.routes.config_thresholds import _hide_shadowed_legacy
+
+    app = make_web_app(tmp_path, monkeypatch)
+
+    with app.app_context():
+        db.session.add(DbConfig(
+            key="l4_high_threshold",
+            value="999",
+            value_type="float",
+            category="threshold_live",
+            description="legacy",
+        ))
+        db.session.commit()
+        rows = DbConfig.query.filter(DbConfig.category.like("threshold_live%")).all()
+        visible = _hide_shadowed_legacy(rows, "live")
+
+    keys = {row.key for row in visible}
+    assert "live.l4_high_threshold" in keys
+    assert "l4_high_threshold" not in keys
 
 
 def test_api_save_ignores_readonly_env_sync(tmp_path, monkeypatch):

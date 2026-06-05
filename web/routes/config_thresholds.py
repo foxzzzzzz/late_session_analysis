@@ -6,21 +6,41 @@ from web.models import db, SystemConfig as DbConfig
 bp = Blueprint("config", __name__)
 
 
+def _hide_shadowed_legacy(rows: list[DbConfig], scope: str) -> list[DbConfig]:
+    """Hide old unscoped keys when scoped replacements exist."""
+    keys = {row.key for row in rows}
+    visible = []
+    for row in rows:
+        if row.key.startswith(f"{scope}."):
+            visible.append(row)
+            continue
+        if f"{scope}.{row.key}" in keys:
+            continue
+        if row.key.startswith("regime_") and scope == "live":
+            parts = row.key.split("_", 2)
+            if len(parts) == 3 and f"live.regime.{parts[1]}.{parts[2]}" in keys:
+                continue
+        visible.append(row)
+    return visible
+
+
 @bp.route("/")
 def index():
     """Show threshold configuration page."""
     # Fetch all config entries grouped by category
-    live_thresholds = (
+    live_thresholds = _hide_shadowed_legacy(
         DbConfig.query
         .filter(DbConfig.category.like("threshold_live%"))
         .order_by(DbConfig.key)
-        .all()
+        .all(),
+        "live",
     )
-    backtest_thresholds = (
+    backtest_thresholds = _hide_shadowed_legacy(
         DbConfig.query
         .filter(DbConfig.category.like("threshold_backtest%"))
         .order_by(DbConfig.key)
-        .all()
+        .all(),
+        "backtest",
     )
 
     # Group by stage for display

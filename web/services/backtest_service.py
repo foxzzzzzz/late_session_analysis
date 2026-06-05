@@ -69,22 +69,27 @@ class BacktestService:
                 "start_date", "end_date", "backtest_type", "capital_flow_mode",
                 "regime_mode", "max_positions",
             }
-            for row in DbConfig.query.filter(DbConfig.category.like("threshold_backtest%")).all():
-                if row.key in _skipped_keys:
+            rows = DbConfig.query.filter(DbConfig.category.like("threshold_backtest%")).all()
+            scoped_keys = {row.key for row in rows if row.key.startswith("backtest.")}
+            for row in rows:
+                key = row.key.split(".", 1)[1] if row.key.startswith("backtest.") else row.key
+                if f"backtest.{key}" in scoped_keys and not row.key.startswith("backtest."):
+                    continue  # legacy unscoped row; scoped row wins
+                if key in _skipped_keys:
                     continue  # skip date/type keys, API params win
                 try:
-                    current = getattr(config, row.key, None)
+                    current = getattr(config, key, None)
                     if current is not None:
                         if row.value_type == "float":
-                            setattr(config, row.key, float(row.value))
+                            setattr(config, key, float(row.value))
                         elif row.value_type == "int":
-                            setattr(config, row.key, int(row.value))
+                            setattr(config, key, int(row.value))
                         elif row.value_type == "bool":
-                            setattr(config, row.key, row.value.lower() in ("true", "1", "yes"))
+                            setattr(config, key, row.value.lower() in ("true", "1", "yes"))
                         elif row.value_type == "json":
-                            setattr(config, row.key, json.loads(row.value) if row.value else None)
+                            setattr(config, key, json.loads(row.value) if row.value else None)
                         else:
-                            setattr(config, row.key, row.value)
+                            setattr(config, key, row.value)
                 except (ValueError, TypeError):
                     pass
 

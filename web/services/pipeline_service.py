@@ -41,20 +41,63 @@ class PipelineService:
         config = SystemConfig()
         config.test_mode = test_mode
         count = 0
-        for row in DbConfig.query.filter(DbConfig.category.like("threshold_live%")).all():
+        rows = DbConfig.query.filter(DbConfig.category.like("threshold_live%")).all()
+        scoped_keys = {row.key for row in rows if row.key.startswith("live.")}
+        for row in rows:
             try:
-                current = getattr(config, row.key, None)
+                key = row.key
+                if key.startswith("live.regime."):
+                    parts = key.split(".", 3)  # live.regime.bull.kline_min_yang_ratio_4d
+                    if len(parts) == 4:
+                        regime_name, field_key = parts[2], parts[3]
+                        if regime_name in config._regime_overrides:
+                            if row.value_type == "float":
+                                config._regime_overrides[regime_name][field_key] = float(row.value)
+                            elif row.value_type == "int":
+                                config._regime_overrides[regime_name][field_key] = int(row.value)
+                            elif row.value_type == "bool":
+                                config._regime_overrides[regime_name][field_key] = row.value.lower() in ("true", "1", "yes")
+                            else:
+                                config._regime_overrides[regime_name][field_key] = row.value
+                            count += 1
+                    continue
+
+                if key.startswith("live."):
+                    key = key.split(".", 1)[1]
+                elif f"live.{key}" in scoped_keys:
+                    continue  # legacy unscoped row; scoped row wins
+
+                # Legacy regime override keys: regime_bull_kline_min_yang_ratio_4d
+                if key.startswith("regime_"):
+                    parts = row.key.split("_", 2)  # ['regime', 'bull', 'kline_min_yang_ratio_4d']
+                    if len(parts) == 3:
+                        regime_name, field_key = parts[1], parts[2]
+                        if f"live.regime.{regime_name}.{field_key}" in scoped_keys:
+                            continue
+                        if regime_name in config._regime_overrides:
+                            if row.value_type == "float":
+                                config._regime_overrides[regime_name][field_key] = float(row.value)
+                            elif row.value_type == "int":
+                                config._regime_overrides[regime_name][field_key] = int(row.value)
+                            elif row.value_type == "bool":
+                                config._regime_overrides[regime_name][field_key] = row.value.lower() in ("true", "1", "yes")
+                            else:
+                                config._regime_overrides[regime_name][field_key] = row.value
+                            count += 1
+                    continue
+
+                current = getattr(config, key, None)
                 if current is not None:
                     if row.value_type == "float":
-                        setattr(config, row.key, float(row.value))
+                        setattr(config, key, float(row.value))
                     elif row.value_type == "int":
-                        setattr(config, row.key, int(row.value))
+                        setattr(config, key, int(row.value))
                     elif row.value_type == "bool":
-                        setattr(config, row.key, row.value.lower() in ("true", "1", "yes"))
+                        setattr(config, key, row.value.lower() in ("true", "1", "yes"))
                     elif row.value_type == "json":
-                        setattr(config, row.key, json.loads(row.value) if row.value else None)
+                        setattr(config, key, json.loads(row.value) if row.value else None)
                     else:
-                        setattr(config, row.key, row.value)
+                        setattr(config, key, row.value)
                     count += 1
             except (ValueError, TypeError):
                 self._emit("SYS", "WARN", f"Cannot override {row.key}={row.value}")

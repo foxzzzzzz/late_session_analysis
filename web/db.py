@@ -19,6 +19,7 @@ __all__ = ["db", "init_db", "seed_system_config"]
 
 def _collect_dataclass_fields(
     dataclass_cls: Any,
+    source: Any | None = None,
     prefix: str = "",
     category: str = "threshold",
     overrides: dict[str, tuple[str, str]] | None = None,
@@ -29,7 +30,9 @@ def _collect_dataclass_fields(
 
     for f in fields(dataclass_cls):
         key = f"{prefix}{f.name}" if prefix else f.name
-        if f.default is not MISSING:
+        if source is not None and hasattr(source, f.name):
+            default = getattr(source, f.name)
+        elif f.default is not MISSING:
             default = f.default
         elif f.default_factory is not MISSING:  # type: ignore[attr-defined]
             default = f.default_factory()  # type: ignore[misc]
@@ -78,6 +81,17 @@ def _collect_dataclass_fields(
     return rows
 
 
+def _scope_threshold_rows(rows: list[dict[str, str]], scope: str) -> list[dict[str, str]]:
+    """Namespace threshold config keys so live/backtest defaults can differ."""
+    scoped = []
+    for row in rows:
+        row = dict(row)
+        if row["category"].startswith("threshold_"):
+            row["key"] = f"{scope}.{row['key']}"
+        scoped.append(row)
+    return scoped
+
+
 def seed_system_config() -> int:
     """Populate system_config with defaults from SystemConfig & BacktestConfig.
 
@@ -116,11 +130,44 @@ def seed_system_config() -> int:
 
     rows: list[dict[str, str]] = []
     rows.extend(
-        _collect_dataclass_fields(SystemConfig, category="threshold_live", overrides={**sched_overrides, **api_overrides})
+        _scope_threshold_rows(
+            _collect_dataclass_fields(
+                SystemConfig,
+                source=live,
+                category="threshold_live",
+                overrides={**sched_overrides, **api_overrides},
+            ),
+            "live",
+        )
     )
     rows.extend(
-        _collect_dataclass_fields(BacktestConfig, category="threshold_backtest", overrides=bt_overrides)
+        _scope_threshold_rows(
+            _collect_dataclass_fields(
+                BacktestConfig,
+                source=bt,
+                category="threshold_backtest",
+                overrides=bt_overrides,
+            ),
+            "backtest",
+        )
     )
+
+    # ── regime overrides: flatten bull/bear nested dicts ────
+    regime_label = {"bull": "牛市", "bear": "熊市"}
+    for regime_name in ("bull", "bear"):
+        overrides_dict = live._regime_overrides.get(regime_name, {})
+        for key, val in overrides_dict.items():
+            row_key = f"live.regime.{regime_name}.{key}"
+            desc = f"{regime_label.get(regime_name, regime_name)}: {key}"
+            if isinstance(val, bool):
+                vt = "bool"; sv = str(val).lower()
+            elif isinstance(val, int):
+                vt = "int"; sv = str(val)
+            elif isinstance(val, float):
+                vt = "float"; sv = str(val)
+            else:
+                vt = "str"; sv = str(val)
+            rows.append({"key": row_key, "value": sv, "value_type": vt, "category": "threshold_live_regime", "description": desc})
 
     count = 0
     for row in rows:
@@ -138,7 +185,8 @@ def init_db(app: Flask) -> None:
     with app.app_context():
         db.create_all()
 
-        # seed if empty
-        if DbConfig.query.count() == 0:
-            n = seed_system_config()
-            app.logger.info(f"Seeded {n} system_config rows")
+        # Seed/backfill missing config rows on every startup. Existing rows are
+        # preserved so Web-edited thresholds are not overwritten.
+        n = seed_system_config()
+        if n:
+            app.logger.info(f"Seeded/backfilled {n} system_config rows")

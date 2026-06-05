@@ -12,12 +12,16 @@ import sys
 import argparse
 from pathlib import Path
 from flask import Flask
+from dotenv import load_dotenv
 
 from web.db import init_db
 
 
 def create_app() -> Flask:
     """Flask application factory."""
+    _project_root = Path(__file__).resolve().parent.parent
+    load_dotenv(_project_root / ".env")
+
     app = Flask(
         __name__,
         template_folder="templates",
@@ -26,7 +30,6 @@ def create_app() -> Flask:
 
     # ── config ──────────────────────────────────────────────
     # use a persistent directory so SQLite survives restarts
-    _project_root = Path(__file__).resolve().parent.parent
     instance_dir = Path(os.getenv("WEB_INSTANCE_DIR", str(_project_root / "web_instance")))
     instance_dir.mkdir(parents=True, exist_ok=True)
     db_path = instance_dir / "dashboard.db"
