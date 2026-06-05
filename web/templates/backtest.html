@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}回测 — 尾盘分析系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1><i class="bi bi-clock-history me-2"></i>回测系统</h1>
+</div>
+
+<div class="row g-3">
+    <!-- Run Form -->
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">新建回测</div>
+            <div class="card-body">
+                <form id="backtest-form" onsubmit="runBacktest(event)">
+                    <div class="mb-3">
+                        <label class="form-label">开始日期</label>
+                        <input type="text" class="form-control" name="start_date"
+                               value="{{ default_start }}" placeholder="YYYYMMDD">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">结束日期</label>
+                        <input type="text" class="form-control" name="end_date"
+                               value="{{ default_end }}" placeholder="YYYYMMDD">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">回测类型</label>
+                        <select class="form-select" name="backtest_type">
+                            <option value="historical">Historical (历史近似)</option>
+                            <option value="live_replay">Live Replay (实盘快照回放)</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">资金流模式</label>
+                        <select class="form-select" name="capital_flow_mode">
+                            <option value="none">None (不使用)</option>
+                            <option value="proxy">Proxy (代理估算)</option>
+                            <option value="replay">Replay (回放)</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">市场状态</label>
+                        <select class="form-select" name="regime">
+                            <option value="auto">Auto (自动检测)</option>
+                            <option value="bull">Bull (牛市)</option>
+                            <option value="bear">Bear (熊市)</option>
+                            <option value="neutral">Neutral (中性)</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100" id="bt-run-btn">
+                        <i class="bi bi-play-fill me-1"></i>开始回测
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">快照数据</div>
+            <div class="card-body" style="font-size:0.85rem;">
+                <p class="text-muted mb-2">
+                    使用 Live Replay 模式回测需要先有每日管线执行产生的快照数据。
+                </p>
+                <p class="text-muted mb-0">快照目录: <code>./live_snapshots/</code></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Results Area -->
+    <div class="col-lg-8">
+        <!-- Terminal -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <i class="bi bi-terminal me-1"></i>回测输出
+                <span id="bt-terminal-status" class="text-muted ms-2" style="font-size:0.75rem;"></span>
+            </div>
+            <div class="card-body p-0">
+                <div class="terminal" id="bt-terminal" style="max-height: 400px;">
+                    <div class="text-muted">点击"开始回测"执行...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Past Runs -->
+        <div class="card">
+            <div class="card-header">回测历史</div>
+            <div class="card-body p-0">
+                {% if past_runs %}
+                <table class="table table-striped mb-0">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>区间</th>
+                            <th>类型</th>
+                            <th>状态</th>
+                            <th>时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for run in past_runs %}
+                        <tr>
+                            <td>#{{ run.id }}</td>
+                            <td>{{ run.start_date }} ~ {{ run.end_date }}</td>
+                            <td>{{ run.backtest_type }}</td>
+                            <td><span class="status-dot {{ run.status }}"></span>{{ run.status }}</td>
+                            <td style="font-size:0.78rem;">{{ run.started_at.strftime('%m/%d %H:%M') if run.started_at else '–' }}</td>
+                            <td>
+                                <a href="/backtest/{{ run.id }}" class="btn btn-outline-light btn-sm">
+                                    <i class="bi bi-eye"></i>
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="p-4 text-center text-muted">
+                    <i class="bi bi-inbox" style="font-size: 2rem;"></i>
+                    <p class="mt-2 mb-0">暂无回测记录</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    const btTerminal = document.getElementById('bt-terminal');
+
+    function btLog(msg) {
+        const now = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        const line = document.createElement('div');
+        line.className = 'log-line';
+        line.innerHTML = `<span class="log-time">${now}</span><span class="log-level INFO">INFO</span><span class="log-msg">${msg}</span>`;
+        btTerminal.appendChild(line);
+        btTerminal.scrollTop = btTerminal.scrollHeight;
+    }
+
+    async function runBacktest(e) {
+        e.preventDefault();
+        const form = document.getElementById('backtest-form');
+        const data = {};
+        for (const el of form.elements) {
+            if (el.name) data[el.name] = el.value;
+        }
+
+        const btn = document.getElementById('bt-run-btn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>执行中...';
+        document.getElementById('bt-terminal-status').textContent = '运行中...';
+        btTerminal.innerHTML = '';
+
+        btLog('正在启动回测...');
+        btLog(`参数: ${data.start_date} ~ ${data.end_date}, 类型=${data.backtest_type}, 资金流=${data.capital_flow_mode}, 市场=${data.regime}`);
+
+        try {
+            const resp = await fetch('/backtest/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            const result = await resp.json();
+            if (result.status === 'ok') {
+                btLog('回测完成 (stub — 完整实现在 Phase 5)');
+                document.getElementById('bt-terminal-status').textContent = '已完成';
+                setTimeout(() => location.reload(), 1500);
+            }
+        } catch (e) {
+            btLog('ERROR: ' + e.message);
+            document.getElementById('bt-terminal-status').textContent = '失败';
+        }
+
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-play-fill me-1"></i>开始回测';
+        }, 3000);
+    }
+</script>
+{% endblock %}

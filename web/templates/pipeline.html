@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}管线执行 — 尾盘分析系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1><i class="bi bi-play-circle me-2"></i>管线执行</h1>
+    <div class="d-flex gap-2">
+        <button class="btn btn-primary btn-sm" id="run-btn" onclick="triggerPipeline()">
+            <i class="bi bi-play-fill me-1"></i>手动执行 (Test模式)
+        </button>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-4 col-md-2">
+        <div class="stat-card accent">
+            <div class="stat-label">快照天数</div>
+            <div class="stat-value">{{ snap_days }}</div>
+        </div>
+    </div>
+    <div class="col-4 col-md-2">
+        <div class="stat-card">
+            <div class="stat-label">快照文件</div>
+            <div class="stat-value">{{ snap_files }}</div>
+        </div>
+    </div>
+    <div class="col-4 col-md-2">
+        <div class="stat-card">
+            <div class="stat-label">快照目录</div>
+            <div class="stat-value" style="font-size:0.75rem;">{{ snap_dir }}</div>
+        </div>
+    </div>
+</div>
+
+<!-- Terminal -->
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-terminal me-1"></i>执行日志</span>
+        <span id="terminal-status" class="text-muted" style="font-size:0.75rem;">等待执行...</span>
+    </div>
+    <div class="card-body p-0">
+        <div class="terminal" id="terminal-log">
+            <div class="connected">等待管线执行... 点击上方按钮开始。</div>
+        </div>
+    </div>
+</div>
+
+<!-- Run History -->
+<div class="card">
+    <div class="card-header">执行历史</div>
+    <div class="card-body p-0">
+        {% if runs %}
+        <table class="table table-striped mb-0">
+            <thead>
+                <tr>
+                    <th>日期</th>
+                    <th>状态</th>
+                    <th>市场</th>
+                    <th>开始</th>
+                    <th>结束</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for run in runs %}
+                <tr>
+                    <td>{{ run.trading_date }}</td>
+                    <td><span class="status-dot {{ run.status }}"></span>{{ run.status }}</td>
+                    <td>{{ run.regime }}</td>
+                    <td style="font-size:0.78rem;">{{ run.started_at.strftime('%H:%M:%S') if run.started_at else '–' }}</td>
+                    <td style="font-size:0.78rem;">{{ run.finished_at.strftime('%H:%M:%S') if run.finished_at else '–' }}</td>
+                    <td>
+                        <a href="/pipeline/{{ run.id }}" class="btn btn-outline-light btn-sm">
+                            <i class="bi bi-eye"></i>
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="p-4 text-center text-muted">
+            <i class="bi bi-inbox" style="font-size: 2rem;"></i>
+            <p class="mt-2 mb-0">暂无执行记录</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    const terminal = document.getElementById('terminal-log');
+    const statusEl = document.getElementById('terminal-status');
+    let eventSource = null;
+
+    function appendLog(stage, level, message) {
+        const now = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        const line = document.createElement('div');
+        line.className = 'log-line';
+        line.innerHTML = `
+            <span class="log-time">${now}</span>
+            <span class="log-stage ${stage}">${stage}</span>
+            <span class="log-level ${level}">${level}</span>
+            <span class="log-msg">${message}</span>
+        `;
+        terminal.appendChild(line);
+        terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    function clearTerminal() {
+        terminal.innerHTML = '';
+    }
+
+    async function triggerPipeline() {
+        const btn = document.getElementById('run-btn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>执行中...';
+
+        clearTerminal();
+        appendLog('SYS', 'INFO', '正在启动管线...');
+        statusEl.textContent = '启动中...';
+
+        try {
+            const resp = await fetch('/pipeline/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ test_mode: true })
+            });
+            const data = await resp.json();
+
+            if (data.status === 'ok') {
+                statusEl.textContent = `Run #${data.run_id} 运行中`;
+                connectSSE(data.run_id);
+            } else {
+                appendLog('SYS', 'ERROR', data.message || '启动失败');
+                statusEl.textContent = '启动失败';
+                resetBtn();
+            }
+        } catch (e) {
+            appendLog('SYS', 'ERROR', '无法连接到服务器: ' + e.message);
+            statusEl.textContent = '连接失败';
+            resetBtn();
+        }
+    }
+
+    function connectSSE(runId) {
+        if (eventSource) eventSource.close();
+
+        eventSource = new EventSource(`/pipeline/stream/${runId}`);
+
+        eventSource.addEventListener('connected', () => {
+            appendLog('SYS', 'INFO', 'SSE 日志流已连接');
+        });
+
+        eventSource.addEventListener('message', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                appendLog(data.stage || 'SYS', data.level || 'INFO', data.message || '');
+            } catch (err) {
+                // ignore parse errors
+            }
+        });
+
+        eventSource.addEventListener('done', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                appendLog('SYS', 'INFO', `管线执行完成，状态: ${data.status}`);
+                statusEl.textContent = `已完成 (${data.status})`;
+            } catch (err) {
+                appendLog('SYS', 'INFO', '管线执行完成');
+                statusEl.textContent = '已完成';
+            }
+            eventSource.close();
+            resetBtn();
+            // Reload page after a delay to show updated history
+            setTimeout(() => location.reload(), 2000);
+        });
+
+        eventSource.onerror = () => {
+            // EventSource auto-reconnects; if it fails permanently, handle here
+            if (eventSource.readyState === EventSource.CLOSED) {
+                appendLog('SYS', 'WARN', 'SSE 连接已关闭');
+                resetBtn();
+            }
+        };
+    }
+
+    function resetBtn() {
+        const btn = document.getElementById('run-btn');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-play-fill me-1"></i>手动执行 (Test模式)';
+    }
+</script>
+{% endblock %}

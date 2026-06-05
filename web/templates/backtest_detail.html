@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}回测 #{{ run.id }} — 尾盘分析系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1><i class="bi bi-file-earmark-text me-2"></i>回测详情 #{{ run.id }}</h1>
+    <a href="/backtest" class="btn btn-outline-light btn-sm">
+        <i class="bi bi-arrow-left me-1"></i>返回列表
+    </a>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-2">
+        <div class="stat-card">
+            <div class="stat-label">区间</div>
+            <div class="stat-value" style="font-size:0.85rem;">{{ run.start_date }} ~ {{ run.end_date }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="stat-card">
+            <div class="stat-label">类型</div>
+            <div class="stat-value" style="font-size:0.9rem;">{{ run.backtest_type }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="stat-card {{ 'success' if run.status == 'completed' else 'accent' }}">
+            <div class="stat-label">状态</div>
+            <div class="stat-value" style="font-size:0.9rem;">
+                <span class="status-dot {{ run.status }}"></span>{{ run.status }}
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="stat-card">
+            <div class="stat-label">市场</div>
+            <div class="stat-value" style="font-size:0.9rem;">{{ run.regime }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="stat-card">
+            <div class="stat-label">资金流</div>
+            <div class="stat-value" style="font-size:0.85rem;">{{ run.capital_flow_mode }}</div>
+        </div>
+    </div>
+</div>
+
+<!-- Performance Metrics -->
+{% if summary %}
+<div class="row g-3 mb-4">
+    {% if summary.win_rate is defined %}
+    <div class="col-4 col-md-2">
+        <div class="stat-card {{ 'danger' if summary.win_rate >= 40 else '' }}">
+            <div class="stat-label">胜率</div>
+            <div class="stat-value">{{ summary.win_rate }}%</div>
+        </div>
+    </div>
+    {% endif %}
+    {% if summary.cumulative_return is defined %}
+    <div class="col-4 col-md-2">
+        <div class="stat-card {{ 'danger' if summary.cumulative_return > 0 else 'success' }}">
+            <div class="stat-label">累计收益</div>
+            <div class="stat-value {{ 'pnl-up' if summary.cumulative_return > 0 else 'pnl-down' if summary.cumulative_return < 0 else '' }}">
+                {{ '+' if summary.cumulative_return > 0 else '' }}{{ summary.cumulative_return }}%
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    {% if summary.sharpe_ratio is defined %}
+    <div class="col-4 col-md-2">
+        <div class="stat-card">
+            <div class="stat-label">夏普比率</div>
+            <div class="stat-value">{{ summary.sharpe_ratio }}</div>
+        </div>
+    </div>
+    {% endif %}
+    {% if summary.max_drawdown is defined %}
+    <div class="col-4 col-md-2">
+        <div class="stat-card success">
+            <div class="stat-label">最大回撤</div>
+            <div class="stat-value">{{ summary.max_drawdown }}%</div>
+        </div>
+    </div>
+    {% endif %}
+    {% if summary.calmar_ratio is defined %}
+    <div class="col-4 col-md-2">
+        <div class="stat-card">
+            <div class="stat-label">Calmar</div>
+            <div class="stat-value">{{ summary.calmar_ratio }}</div>
+        </div>
+    </div>
+    {% endif %}
+    {% if summary.total_trades is defined %}
+    <div class="col-4 col-md-2">
+        <div class="stat-card">
+            <div class="stat-label">总交易</div>
+            <div class="stat-value">{{ summary.total_trades }}</div>
+        </div>
+    </div>
+    {% endif %}
+    {% if summary.profit_factor is defined %}
+    <div class="col-4 col-md-2">
+        <div class="stat-card {{ 'danger' if summary.profit_factor > 1 else '' }}">
+            <div class="stat-label">盈亏比</div>
+            <div class="stat-value">{{ summary.profit_factor }}</div>
+        </div>
+    </div>
+    {% endif %}
+    {% if summary.avg_return is defined %}
+    <div class="col-4 col-md-2">
+        <div class="stat-card {{ 'danger' if summary.avg_return > 0 else 'success' }}">
+            <div class="stat-label">平均收益</div>
+            <div class="stat-value {{ 'pnl-up' if summary.avg_return > 0 else 'pnl-down' if summary.avg_return < 0 else '' }}">
+                {{ '+' if summary.avg_return > 0 else '' }}{{ summary.avg_return }}%
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- Raw Summary -->
+<div class="card">
+    <div class="card-header">结果摘要</div>
+    <div class="card-body">
+        {% if summary %}
+        <pre class="terminal" style="max-height: 400px;"><code>{{ summary | tojson(indent=2) }}</code></pre>
+        {% elif run.summary_json %}
+        <pre class="terminal" style="max-height: 400px;"><code>{{ run.summary_json }}</code></pre>
+        {% else %}
+        <div class="text-muted text-center py-3">暂无摘要数据</div>
+        {% endif %}
+
+        {% if run.output_dir %}
+        <div class="mt-2 text-muted" style="font-size: 0.8rem;">
+            <i class="bi bi-folder me-1"></i>输出目录: <code>{{ run.output_dir }}</code>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

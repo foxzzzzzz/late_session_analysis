@@ -5,4 +5,5 @@ backtest_cache/
 backtest_reports/
 .env
 live_snapshots/
+web_instance/
 .claude/settings.local.json

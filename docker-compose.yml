@@ -1,0 +1,17 @@
+version: "3.9"
+services:
+  late-session:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+      - ./backtest_reports:/app/backtest_reports
+      - ./backtest_cache:/app/backtest_cache
+      - ./live_snapshots:/app/live_snapshots
+      - ./.env:/app/.env:ro
+      - ./web_instance:/app/web_instance
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped

@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}API 配置 — 尾盘分析系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1><i class="bi bi-key me-2"></i>LLM API Key 配置</h1>
+    <a href="/config" class="btn btn-outline-light btn-sm">
+        <i class="bi bi-arrow-left me-1"></i>返回阈值配置
+    </a>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-body">
+                <form id="api-form" onsubmit="saveApiConfig(event)">
+                    <div class="mb-3">
+                        <label class="form-label">API Key</label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="api-key" name="llm_api_key"
+                                   placeholder="sk-..." value="{{ api_key.value if api_key else '' }}">
+                            <button class="btn btn-outline-light" type="button" onclick="toggleApiKey()">
+                                <i class="bi bi-eye" id="toggle-icon"></i>
+                            </button>
+                        </div>
+                        <div class="form-text">
+                            当前: <code>{{ masked_key }}</code>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">API Base URL</label>
+                        <input type="text" class="form-control" name="llm_api_base"
+                               value="{{ api_base.value if api_base else 'https://api.deepseek.com/v1' }}">
+                        <div class="form-text">LLM 服务的 API 端点地址</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Model</label>
+                        <input type="text" class="form-control" name="llm_model"
+                               value="{{ model.value if model else 'deepseek-chat' }}">
+                        <div class="form-text">模型名称，如 deepseek-chat, gpt-4o 等</div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary w-100" id="save-btn">
+                        <i class="bi bi-check-lg me-1"></i>保存配置
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">连接测试</div>
+            <div class="card-body">
+                <p class="text-muted mb-2" style="font-size: 0.85rem;">
+                    保存后可通过管线执行来验证 API Key 是否有效。
+                </p>
+                <a href="/pipeline" class="btn btn-outline-light btn-sm">
+                    <i class="bi bi-play-circle me-1"></i>前往管线执行
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    function toggleApiKey() {
+        const input = document.getElementById('api-key');
+        const icon = document.getElementById('toggle-icon');
+        if (input.type === 'password') {
+            input.type = 'text';
+            icon.className = 'bi bi-eye-slash';
+        } else {
+            input.type = 'password';
+            icon.className = 'bi bi-eye';
+        }
+    }
+
+    async function saveApiConfig(e) {
+        e.preventDefault();
+        const form = document.getElementById('api-form');
+        const data = {};
+        for (const el of form.elements) {
+            if (el.name && el.value.trim()) {
+                data[el.name] = el.value.trim();
+            }
+        }
+
+        const btn = document.getElementById('save-btn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>保存中...';
+
+        try {
+            const resp = await fetch('/config/api/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            const result = await resp.json();
+            if (result.status === 'ok') {
+                btn.className = 'btn btn-success w-100';
+                btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>已保存';
+            }
+        } catch (e) {
+            btn.className = 'btn btn-danger w-100';
+            btn.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>保存失败';
+        }
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.className = 'btn btn-primary w-100';
+            btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>保存配置';
+        }, 3000);
+    }
+</script>
+{% endblock %}

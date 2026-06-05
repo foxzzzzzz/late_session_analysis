@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}模拟交易 — 尾盘分析系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1><i class="bi bi-wallet2 me-2"></i>模拟交易</h1>
+    <div class="text-muted" style="font-size:0.8rem;">
+        规则: strong_buy → ¥{{ '{:,.0f}'.format(stats.default_notional) }} | 止损 {{ stats.stop_loss_pct }}% | 止盈 +{{ stats.take_profit_pct }}%
+    </div>
+</div>
+
+<!-- Portfolio Summary -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="stat-card primary">
+            <div class="stat-label">总投入</div>
+            <div class="stat-value" style="font-size:1rem;">¥{{ '{:,.0f}'.format(stats.total_invested) }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="stat-card">
+            <div class="stat-label">持仓市值</div>
+            <div class="stat-value" style="font-size:1rem;">¥{{ '{:,.0f}'.format(stats.open_value) }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="stat-card {{ 'danger' if stats.realized_pnl > 0 else 'success' }}">
+            <div class="stat-label">已实现盈亏</div>
+            <div class="stat-value {{ 'pnl-up' if stats.realized_pnl > 0 else 'pnl-down' if stats.realized_pnl < 0 else '' }}" style="font-size:1.1rem;">
+                {{ '+' if stats.realized_pnl > 0 else '' }}¥{{ '{:,.0f}'.format(stats.realized_pnl) }}
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="stat-card {{ 'danger' if stats.unrealized_pnl > 0 else 'success' }}">
+            <div class="stat-label">未实现盈亏</div>
+            <div class="stat-value {{ 'pnl-up' if stats.unrealized_pnl > 0 else 'pnl-down' if stats.unrealized_pnl < 0 else '' }}" style="font-size:1.1rem;">
+                {{ '+' if stats.unrealized_pnl > 0 else '' }}¥{{ '{:,.0f}'.format(stats.unrealized_pnl) }}
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="stat-card {{ 'danger' if stats.total_pnl > 0 else 'success' }}">
+            <div class="stat-label">总盈亏</div>
+            <div class="stat-value {{ 'pnl-up' if stats.total_pnl > 0 else 'pnl-down' if stats.total_pnl < 0 else '' }}">
+                {{ '+' if stats.total_pnl > 0 else '' }}¥{{ '{:,.0f}'.format(stats.total_pnl) }}
+            </div>
+            <div class="stat-sub {{ 'pnl-up' if stats.total_return_pct > 0 else 'pnl-down' if stats.total_return_pct < 0 else '' }}">
+                {{ '+' if stats.total_return_pct > 0 else '' }}{{ stats.total_return_pct }}%
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="stat-card success">
+            <div class="stat-label">胜率</div>
+            <div class="stat-value">{{ stats.win_rate }}%</div>
+            <div class="stat-sub">{{ stats.closed_count }} 笔已平仓</div>
+        </div>
+    </div>
+</div>
+
+<!-- Open Positions -->
+<div class="section-title">持仓 ({{ stats.open_count }})</div>
+<div class="card mb-3">
+    <div class="card-body p-0">
+        {% if open_trades %}
+        <div class="table-responsive">
+            <table class="table table-striped mb-0">
+                <thead>
+                    <tr>
+                        <th>代码</th>
+                        <th>名称</th>
+                        <th>入场日</th>
+                        <th>入场价</th>
+                        <th>当前价</th>
+                        <th>盈亏%</th>
+                        <th>金额</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for trade in open_trades %}
+                    <tr>
+                        <td><code>{{ trade.recommendation.code }}</code></td>
+                        <td>{{ trade.recommendation.name }}</td>
+                        <td>{{ trade.entry_date }}</td>
+                        <td>{{ '%.2f' | format(trade.entry_price) }}</td>
+                        <td>{{ '%.2f' | format(trade.recommendation.entry_price * (1 + (trade.return_pct or 0) / 100)) if trade.return_pct else '–' }}</td>
+                        <td class="{{ 'pnl-up' if (trade.return_pct or 0) > 0 else 'pnl-down' if (trade.return_pct or 0) < 0 else 'pnl-flat' }}">
+                            {{ '+' if (trade.return_pct or 0) > 0 else '' }}{{ '%.2f' | format(trade.return_pct or 0) }}%
+                        </td>
+                        <td style="font-size:0.85rem;">¥{{ '{:,.0f}'.format(trade.notional) }}</td>
+                        <td>
+                            <button class="btn btn-outline-danger btn-sm" onclick="closeTrade({{ trade.id }})">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-4 text-center text-muted">
+            <i class="bi bi-bag" style="font-size: 2rem;"></i>
+            <p class="mt-2 mb-0">暂无持仓</p>
+            <p class="text-muted" style="font-size:0.75rem;">执行管线后，strong_buy 推荐将自动创建模拟持仓</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Closed Positions -->
+<div class="section-title">已平仓 ({{ stats.closed_count }})</div>
+<div class="card">
+    <div class="card-body p-0">
+        {% if closed_trades %}
+        <div class="table-responsive">
+            <table class="table table-striped mb-0">
+                <thead>
+                    <tr>
+                        <th>代码</th>
+                        <th>名称</th>
+                        <th>入场日</th>
+                        <th>出场日</th>
+                        <th>入场价</th>
+                        <th>出场价</th>
+                        <th>盈亏%</th>
+                        <th>原因</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for trade in closed_trades %}
+                    <tr>
+                        <td><code>{{ trade.recommendation.code }}</code></td>
+                        <td>{{ trade.recommendation.name }}</td>
+                        <td>{{ trade.entry_date }}</td>
+                        <td>{{ trade.exit_date or '–' }}</td>
+                        <td>{{ '%.2f' | format(trade.entry_price) }}</td>
+                        <td>{{ '%.2f' | format(trade.exit_price or 0) }}</td>
+                        <td class="{{ 'pnl-up' if (trade.return_pct or 0) > 0 else 'pnl-down' if (trade.return_pct or 0) < 0 else 'pnl-flat' }}">
+                            {{ '+' if (trade.return_pct or 0) > 0 else '' }}{{ '%.2f' | format(trade.return_pct or 0) }}%
+                        </td>
+                        <td>
+                            {% if trade.exit_reason == 'stop_loss' %}
+                            <span class="badge bg-success">止损</span>
+                            {% elif trade.exit_reason == 'take_profit' %}
+                            <span class="badge bg-danger">止盈</span>
+                            {% elif trade.exit_reason == 'manual' %}
+                            <span class="badge bg-secondary">手动</span>
+                            {% else %}
+                            <span class="badge bg-secondary">{{ trade.exit_reason or '–' }}</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-4 text-center text-muted">
+            <i class="bi bi-archive" style="font-size: 2rem;"></i>
+            <p class="mt-2 mb-0">暂无平仓记录</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    async function closeTrade(tradeId) {
+        if (!confirm('确认手动平仓？')) return;
+        try {
+            const resp = await fetch(`/simulation/close/${tradeId}`, { method: 'POST' });
+            const data = await resp.json();
+            if (data.status === 'ok') {
+                location.reload();
+            } else {
+                alert(data.message || '操作失败');
+            }
+        } catch (e) {
+            alert('网络错误: ' + e.message);
+        }
+    }
+</script>
+{% endblock %}

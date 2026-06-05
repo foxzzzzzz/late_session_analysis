@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}仪表盘 — 尾盘分析系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1><i class="bi bi-speedometer2 me-2"></i>仪表盘</h1>
+    <div>
+        {% if stats.regime == 'bull' %}
+        <span class="regime-bull"><i class="bi bi-arrow-up-circle-fill me-1"></i>牛市</span>
+        {% elif stats.regime == 'bear' %}
+        <span class="regime-bear"><i class="bi bi-arrow-down-circle-fill me-1"></i>熊市</span>
+        {% else %}
+        <span class="regime-neutral"><i class="bi bi-dash-circle me-1"></i>{{ stats.regime if stats.regime != '–' else '未知' }}</span>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Quick Stats Row -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="stat-card primary">
+            <div class="stat-label">今日推荐</div>
+            <div class="stat-value">{{ stats.strong_buy_count + stats.buy_count }}</div>
+            <div class="stat-sub">
+                <span class="badge badge-strong-buy me-1">{{ stats.strong_buy_count }} 强买</span>
+                <span class="badge badge-buy me-1">{{ stats.buy_count }} 买入</span>
+                <span class="badge badge-watch">{{ stats.watch_count }} 关注</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="stat-card success">
+            <div class="stat-label">累计胜率</div>
+            <div class="stat-value">{{ stats.win_rate }}%</div>
+            <div class="stat-sub">{{ stats.closed_trades }} 笔已平仓</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="stat-card {{ 'danger' if stats.cumulative_return > 0 else 'success' }}">
+            <div class="stat-label">模拟累计收益</div>
+            <div class="stat-value {{ 'pnl-up' if stats.cumulative_return > 0 else 'pnl-down' if stats.cumulative_return < 0 else '' }}">
+                {{ '+' if stats.cumulative_return > 0 else '' }}{{ stats.cumulative_return }}%
+            </div>
+            <div class="stat-sub">{{ stats.open_positions }} 持仓中</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="stat-card accent">
+            <div class="stat-label">Live Snapshot</div>
+            <div class="stat-value">{{ stats.snapshot_days }}</div>
+            <div class="stat-sub">{{ stats.snapshot_files }} 个文件</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-lg-2">
+        <div class="stat-card">
+            <div class="stat-label">上次执行</div>
+            <div class="stat-value" style="font-size: 1rem;">
+                <span class="status-dot {{ stats.last_run_status }} me-1"></span>{{ stats.last_run_date }}
+            </div>
+            <div class="stat-sub">{{ stats.last_run_status }}</div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Runs & Next Schedule -->
+<div class="row g-3">
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">最近执行记录</div>
+            <div class="card-body p-0">
+                {% if recent_runs %}
+                <table class="table table-striped mb-0">
+                    <thead>
+                        <tr>
+                            <th>日期</th>
+                            <th>状态</th>
+                            <th>市场</th>
+                            <th>S0</th>
+                            <th>S1</th>
+                            <th>S2</th>
+                            <th>S3</th>
+                            <th>S4</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for run in recent_runs %}
+                        <tr>
+                            <td>{{ run.trading_date }}</td>
+                            <td><span class="status-dot {{ run.status }}"></span>{{ run.status }}</td>
+                            <td>{{ run.regime }}</td>
+                            {% set stages = run.stages_json | from_json if run.stages_json else {} %}
+                            <td>{{ stages.get('S0', '–') }}</td>
+                            <td>{{ stages.get('S1', '–') }}</td>
+                            <td>{{ stages.get('S2', '–') }}</td>
+                            <td>{{ stages.get('S3', '–') }}</td>
+                            <td>{{ stages.get('S4', '–') }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="p-4 text-center text-muted">
+                    <i class="bi bi-inbox" style="font-size: 2rem;"></i>
+                    <p class="mt-2 mb-0">暂无执行记录</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-3">
+        <div class="card h-100">
+            <div class="card-header">下次自动执行</div>
+            <div class="card-body text-center">
+                <div class="countdown" id="next-run-countdown">计算中...</div>
+                <p class="text-muted mt-2 mb-0" style="font-size: 0.8rem;">
+                    <i class="bi bi-alarm me-1"></i>每日 14:29
+                </p>
+                <p class="text-muted mt-1" style="font-size: 0.72rem;">
+                    仅交易日自动触发<br>周末/节假日跳过
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-3">
+        <div class="card h-100">
+            <div class="card-header">快捷操作</div>
+            <div class="card-body d-flex flex-column gap-2">
+                <a href="/config" class="btn btn-outline-light btn-sm">
+                    <i class="bi bi-sliders me-1"></i>阈值配置
+                </a>
+                <a href="/config/api" class="btn btn-outline-light btn-sm">
+                    <i class="bi bi-key me-1"></i>API Key 配置
+                </a>
+                <a href="/pipeline" class="btn btn-outline-light btn-sm">
+                    <i class="bi bi-play-circle me-1"></i>手动执行管线
+                </a>
+                <a href="/backtest" class="btn btn-outline-light btn-sm">
+                    <i class="bi bi-clock-history me-1"></i>运行回测
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Countdown to next 14:29
+    function updateCountdown() {
+        const now = new Date();
+        const next = new Date();
+        next.setHours(14, 29, 0, 0);
+        if (next <= now) {
+            next.setDate(next.getDate() + 1);
+        }
+        // Skip weekends
+        if (next.getDay() === 0) next.setDate(next.getDate() + 1);
+        if (next.getDay() === 6) next.setDate(next.getDate() + 2);
+
+        const diff = next - now;
+        const h = Math.floor(diff / 3600000);
+        const m = Math.floor((diff % 3600000) / 60000);
+        const s = Math.floor((diff % 60000) / 1000);
+        const el = document.getElementById('next-run-countdown');
+        el.textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    }
+    updateCountdown();
+    setInterval(updateCountdown, 1000);
+</script>
+{% endblock %}

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}推荐追踪 — 尾盘分析系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1><i class="bi bi-star me-2"></i>推荐追踪</h1>
+    <div>
+        <input type="date" class="form-control form-control-sm d-inline-block" style="width: auto;"
+               value="{{ selected_date }}" id="date-picker"
+               onchange="window.location='?date=' + this.value">
+    </div>
+</div>
+
+<!-- Summary -->
+<div class="row g-3 mb-3">
+    <div class="col-6 col-md-3">
+        <div class="stat-card">
+            <div class="stat-label">当日推荐</div>
+            <div class="stat-value">{{ summary.total }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-card success">
+            <div class="stat-label">已追踪</div>
+            <div class="stat-value">{{ summary.tracked }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-card {{ 'danger' if summary.win_rate >= 50 else 'success' }}">
+            <div class="stat-label">胜率</div>
+            <div class="stat-value">{{ summary.win_rate }}%</div>
+            <div class="stat-sub">{{ summary.positive }}/{{ summary.tracked }} 正收益</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-card {{ 'danger' if summary.avg_return > 0 else 'success' }}">
+            <div class="stat-label">平均收益</div>
+            <div class="stat-value {{ 'pnl-up' if summary.avg_return > 0 else 'pnl-down' if summary.avg_return < 0 else '' }}">
+                {{ '+' if summary.avg_return > 0 else '' }}{{ summary.avg_return }}%
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recommendations -->
+{% if recommendations %}
+<div class="card">
+    <div class="card-header">
+        推荐列表 — {{ selected_date }}
+        <span class="text-muted ms-2" style="font-size:0.75rem;">{{ recommendations | length }} 只</span>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-striped mb-0">
+                <thead>
+                    <tr>
+                        <th>代码</th>
+                        <th>名称</th>
+                        <th>等级</th>
+                        <th>评分</th>
+                        <th>入场价</th>
+                        {% for td in track_dates %}
+                        <th class="text-end">{{ td[5:] }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for rec in recommendations %}
+                    <tr>
+                        <td><code>{{ rec.code }}</code></td>
+                        <td>{{ rec.name }}</td>
+                        <td>
+                            {% if rec.level == 'strong_buy' %}
+                            <span class="badge badge-strong-buy">强买</span>
+                            {% elif rec.level == 'buy' %}
+                            <span class="badge badge-buy">买入</span>
+                            {% else %}
+                            <span class="badge badge-watch">关注</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ '%.1f' | format(rec.final_score) }}</td>
+                        <td>{{ '%.2f' | format(rec.entry_price) }}</td>
+                        {% set tracks = tracking.get(rec.id, []) %}
+                        {% set track_map = {} %}
+                        {% for t in tracks %}{% set _ = track_map.update({t.track_date.isoformat(): t}) %}{% endfor %}
+                        {% for td in track_dates %}
+                        <td class="text-end">
+                            {% set t = track_map.get(td) %}
+                            {% if t %}
+                            <span class="{{ 'pnl-up' if t.cumulative_return_pct > 0 else 'pnl-down' if t.cumulative_return_pct < 0 else 'pnl-flat' }}">
+                                {{ '+' if t.cumulative_return_pct > 0 else '' }}{{ '%.2f' | format(t.cumulative_return_pct) }}%
+                            </span>
+                            {% else %}
+                            <span class="text-muted">–</span>
+                            {% endif %}
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="card-body text-center py-5 text-muted">
+        <i class="bi bi-calendar-x" style="font-size: 3rem;"></i>
+        <p class="mt-3 mb-0">{{ selected_date }} 暂无推荐数据</p>
+    </div>
+</div>
+{% endif %}
+
+<!-- Available dates sidebar -->
+<div class="mt-3">
+    <div class="d-flex flex-wrap gap-1">
+        {% for d in available_dates[:20] %}
+        <a href="?date={{ d }}" class="btn btn-outline-light btn-sm {{ 'active' if d == selected_date }}">
+            {{ d[5:] }}
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

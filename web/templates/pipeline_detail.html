@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}管线 #{{ run.id }} — 尾盘分析系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1><i class="bi bi-journal-text me-2"></i>管线执行详情</h1>
+    <a href="/pipeline" class="btn btn-outline-light btn-sm">
+        <i class="bi bi-arrow-left me-1"></i>返回列表
+    </a>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-6 col-md-2">
+        <div class="stat-card">
+            <div class="stat-label">日期</div>
+            <div class="stat-value" style="font-size:1rem;">{{ run.trading_date }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="stat-card {{ 'success' if run.status == 'completed' else 'danger' if run.status == 'failed' else 'accent' }}">
+            <div class="stat-label">状态</div>
+            <div class="stat-value" style="font-size:1rem;">
+                <span class="status-dot {{ run.status }}"></span>{{ run.status }}
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="stat-card">
+            <div class="stat-label">市场</div>
+            <div class="stat-value" style="font-size:1rem;">{{ run.regime }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="stat-card">
+            <div class="stat-label">开始</div>
+            <div class="stat-value" style="font-size:0.85rem;">{{ run.started_at.strftime('%H:%M:%S') if run.started_at else '–' }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-2">
+        <div class="stat-card">
+            <div class="stat-label">结束</div>
+            <div class="stat-value" style="font-size:0.85rem;">{{ run.finished_at.strftime('%H:%M:%S') if run.finished_at else '–' }}</div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <i class="bi bi-terminal me-1"></i>执行日志
+        <span class="text-muted ms-2" style="font-size:0.75rem;">{{ logs | length }} 条记录</span>
+    </div>
+    <div class="card-body p-0">
+        <div class="terminal" style="max-height: 600px;">
+            {% if logs %}
+            {% for log in logs %}
+            <div class="log-line">
+                <span class="log-time">{{ log.timestamp.strftime('%H:%M:%S') }}</span>
+                <span class="log-stage {{ log.stage }}">{{ log.stage }}</span>
+                <span class="log-level {{ log.level }}">{{ log.level }}</span>
+                <span class="log-msg">{{ log.message }}</span>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="text-muted">暂无日志记录</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

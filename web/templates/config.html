@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}阈值配置 — 尾盘分析系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1><i class="bi bi-sliders me-2"></i>阈值配置</h1>
+    <div>
+        <button class="btn btn-primary btn-sm" id="save-all-btn" onclick="saveAllConfig()">
+            <i class="bi bi-check-lg me-1"></i>保存全部
+        </button>
+    </div>
+</div>
+
+<ul class="nav nav-tabs mb-3" id="configTabs" role="tablist">
+    <li class="nav-item">
+        <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-live" type="button">实盘阈值</button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-backtest" type="button">回测阈值</button>
+    </li>
+</ul>
+
+<div class="tab-content">
+    <!-- Live Thresholds -->
+    <div class="tab-pane fade show active" id="tab-live">
+        <div class="accordion" id="accordionLive">
+            {% set groups = {} %}
+            {% for t in live_thresholds %}
+                {% set stage = t.key.split('_')[0] | upper %}
+                {% if stage not in groups %}{% set _ = groups.update({stage: []}) %}{% endif %}
+                {% set _ = groups[stage].append(t) %}
+            {% endfor %}
+
+            {% for stage, items in groups.items() %}
+            <div class="accordion-item">
+                <h2 class="accordion-header">
+                    <button class="accordion-button {{ 'collapsed' if not loop.first }}" data-bs-toggle="collapse" data-bs-target="#live-{{ stage }}">
+                        {{ stage }} 阶段 ({{ items | length }} 参数)
+                    </button>
+                </h2>
+                <div id="live-{{ stage }}" class="accordion-collapse collapse {{ 'show' if loop.first }}">
+                    <div class="accordion-body">
+                        <div class="config-grid">
+                            {% for item in items %}
+                            <div class="config-row">
+                                <div>
+                                    <div class="config-key">{{ item.key }}</div>
+                                    <div class="config-desc">{{ item.description }}</div>
+                                </div>
+                                <input type="text" class="form-control form-control-sm config-input"
+                                       value="{{ item.value }}"
+                                       data-key="{{ item.key }}"
+                                       data-type="{{ item.value_type }}" />
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Backtest Thresholds -->
+    <div class="tab-pane fade" id="tab-backtest">
+        <div class="accordion" id="accordionBacktest">
+            {% set bt_groups = {} %}
+            {% for t in backtest_thresholds %}
+                {% set stage = t.key.split('_')[0] | upper %}
+                {% if stage not in bt_groups %}{% set _ = bt_groups.update({stage: []}) %}{% endif %}
+                {% set _ = bt_groups[stage].append(t) %}
+            {% endfor %}
+
+            {% for stage, items in bt_groups.items() %}
+            <div class="accordion-item">
+                <h2 class="accordion-header">
+                    <button class="accordion-button {{ 'collapsed' if not loop.first }}" data-bs-toggle="collapse" data-bs-target="#bt-{{ stage }}">
+                        {{ stage }} 阶段 ({{ items | length }} 参数)
+                    </button>
+                </h2>
+                <div id="bt-{{ stage }}" class="accordion-collapse collapse {{ 'show' if loop.first }}">
+                    <div class="accordion-body">
+                        <div class="config-grid">
+                            {% for item in items %}
+                            <div class="config-row">
+                                <div>
+                                    <div class="config-key">{{ item.key }}</div>
+                                    <div class="config-desc">{{ item.description }}</div>
+                                </div>
+                                <input type="text" class="form-control form-control-sm config-input"
+                                       value="{{ item.value }}"
+                                       data-key="{{ item.key }}"
+                                       data-type="{{ item.value_type }}" />
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    async function saveAllConfig() {
+        const inputs = document.querySelectorAll('.config-input');
+        const data = {};
+        let count = 0;
+        inputs.forEach(input => {
+            const key = input.dataset.key;
+            const val = input.value.trim();
+            if (key && val) {
+                data[key] = val;
+                count++;
+            }
+        });
+
+        const btn = document.getElementById('save-all-btn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>保存中...';
+
+        try {
+            const resp = await fetch('/config/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            const result = await resp.json();
+            if (result.status === 'ok') {
+                btn.className = 'btn btn-success btn-sm';
+                btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>已保存 ' + result.updated + ' 项';
+            }
+        } catch (e) {
+            btn.className = 'btn btn-danger btn-sm';
+            btn.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>保存失败';
+        }
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.className = 'btn btn-primary btn-sm';
+            btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>保存全部';
+        }, 3000);
+    }
+</script>
+{% endblock %}
