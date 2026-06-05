@@ -66,6 +66,10 @@ class BacktestEngine:
                 raise FileNotFoundError(
                     f"live_replay snapshots not found: {snapshot_dir}"
                 )
+            raise NotImplementedError(
+                "live_replay snapshot execution is not implemented yet; "
+                "use historical/proxy until replay loader is wired"
+            )
 
         # 1. 加载股票池
         self._init_stock_pool()

@@ -78,8 +78,8 @@
                             <span class="badge badge-watch">关注</span>
                             {% endif %}
                         </td>
-                        <td>{{ '%.1f' | format(rec.final_score) }}</td>
-                        <td>{{ '%.2f' | format(rec.entry_price) }}</td>
+                        <td>{{ rec.final_score | fmt('.1f') }}</td>
+                        <td>{{ rec.entry_price | fmt }}</td>
                         {% set tracks = tracking.get(rec.id, []) %}
                         {% set track_map = {} %}
                         {% for t in tracks %}{% set _ = track_map.update({t.track_date.isoformat(): t}) %}{% endfor %}
@@ -88,7 +88,7 @@
                             {% set t = track_map.get(td) %}
                             {% if t %}
                             <span class="{{ 'pnl-up' if t.cumulative_return_pct > 0 else 'pnl-down' if t.cumulative_return_pct < 0 else 'pnl-flat' }}">
-                                {{ '+' if t.cumulative_return_pct > 0 else '' }}{{ '%.2f' | format(t.cumulative_return_pct) }}%
+                                {{ '+' if t.cumulative_return_pct > 0 else '' }}{{ t.cumulative_return_pct | fmt }}%
                             </span>
                             {% else %}
                             <span class="text-muted">–</span>

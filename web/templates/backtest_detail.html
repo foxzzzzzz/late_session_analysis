@@ -57,7 +57,7 @@
     {% endif %}
     {% if summary.cumulative_return is defined %}
     <div class="col-4 col-md-2">
-        <div class="stat-card {{ 'danger' if summary.cumulative_return > 0 else 'success' }}">
+        <div class="stat-card {{ 'success' if summary.cumulative_return > 0 else 'danger' if summary.cumulative_return < 0 else '' }}">
             <div class="stat-label">累计收益</div>
             <div class="stat-value {{ 'pnl-up' if summary.cumulative_return > 0 else 'pnl-down' if summary.cumulative_return < 0 else '' }}">
                 {{ '+' if summary.cumulative_return > 0 else '' }}{{ summary.cumulative_return }}%
@@ -107,7 +107,7 @@
     {% endif %}
     {% if summary.avg_return is defined %}
     <div class="col-4 col-md-2">
-        <div class="stat-card {{ 'danger' if summary.avg_return > 0 else 'success' }}">
+        <div class="stat-card {{ 'success' if summary.avg_return > 0 else 'danger' if summary.avg_return < 0 else '' }}">
             <div class="stat-label">平均收益</div>
             <div class="stat-value {{ 'pnl-up' if summary.avg_return > 0 else 'pnl-down' if summary.avg_return < 0 else '' }}">
                 {{ '+' if summary.avg_return > 0 else '' }}{{ summary.avg_return }}%

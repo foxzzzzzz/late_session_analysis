@@ -146,23 +146,20 @@ class SimulationService:
     def _fetch_latest_prices(codes: list[str]) -> dict[str, float]:
         """Fetch latest close prices for a list of stock codes.
 
-        Uses baostock for historical, falls back to tencent for real-time.
+        Uses mootdx daily batch, falls back to tencent for real-time.
         """
         result: dict[str, float] = {}
         if not codes:
             return result
 
-        # Try mootdx kline first (works during market hours)
+        # Try mootdx kline batch first
         try:
             from data_provider.kline_provider import KlineProvider
             kp = KlineProvider()
-            for code in codes:
-                try:
-                    df = kp.load_daily(code, days=5)
-                    if df is not None and not df.empty:
-                        result[code] = float(df.iloc[-1]["close"])
-                except Exception:
-                    pass
+            daily = kp.load_daily_batch(list(codes), bars=5)
+            for code, df in daily.items():
+                if df is not None and not df.empty:
+                    result[code] = float(df.iloc[-1]["close"])
         except Exception:
             pass
 
@@ -172,10 +169,10 @@ class SimulationService:
             try:
                 from data_provider.tencent_fetcher import TencentFetcher
                 tf = TencentFetcher()
-                quotes = tf.fetch_multiple(remaining)
-                for code, q in quotes.items():
-                    if q.get("price", 0) > 0:
-                        result[code] = float(q["price"])
+                quotes = tf.fetch_codes(remaining)
+                for q in quotes:
+                    if q.price > 0:
+                        result[q.code] = float(q.price)
             except Exception:
                 pass
 

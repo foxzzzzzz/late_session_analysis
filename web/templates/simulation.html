@@ -84,10 +84,10 @@
                         <td><code>{{ trade.recommendation.code }}</code></td>
                         <td>{{ trade.recommendation.name }}</td>
                         <td>{{ trade.entry_date }}</td>
-                        <td>{{ '%.2f' | format(trade.entry_price) }}</td>
-                        <td>{{ '%.2f' | format(trade.recommendation.entry_price * (1 + (trade.return_pct or 0) / 100)) if trade.return_pct else '–' }}</td>
+                        <td>{{ trade.entry_price | fmt }}</td>
+                        <td>{{ trade.recommendation.entry_price * (1 + (trade.return_pct or 0) / 100) | fmt if trade.return_pct else '–' }}</td>
                         <td class="{{ 'pnl-up' if (trade.return_pct or 0) > 0 else 'pnl-down' if (trade.return_pct or 0) < 0 else 'pnl-flat' }}">
-                            {{ '+' if (trade.return_pct or 0) > 0 else '' }}{{ '%.2f' | format(trade.return_pct or 0) }}%
+                            {{ '+' if (trade.return_pct or 0) > 0 else '' }}{{ (trade.return_pct or 0) | fmt }}%
                         </td>
                         <td style="font-size:0.85rem;">¥{{ '{:,.0f}'.format(trade.notional) }}</td>
                         <td>
@@ -136,10 +136,10 @@
                         <td>{{ trade.recommendation.name }}</td>
                         <td>{{ trade.entry_date }}</td>
                         <td>{{ trade.exit_date or '–' }}</td>
-                        <td>{{ '%.2f' | format(trade.entry_price) }}</td>
-                        <td>{{ '%.2f' | format(trade.exit_price or 0) }}</td>
+                        <td>{{ trade.entry_price | fmt }}</td>
+                        <td>{{ (trade.exit_price or 0) | fmt }}</td>
                         <td class="{{ 'pnl-up' if (trade.return_pct or 0) > 0 else 'pnl-down' if (trade.return_pct or 0) < 0 else 'pnl-flat' }}">
-                            {{ '+' if (trade.return_pct or 0) > 0 else '' }}{{ '%.2f' | format(trade.return_pct or 0) }}%
+                            {{ '+' if (trade.return_pct or 0) > 0 else '' }}{{ (trade.return_pct or 0) | fmt }}%
                         </td>
                         <td>
                             {% if trade.exit_reason == 'stop_loss' %}

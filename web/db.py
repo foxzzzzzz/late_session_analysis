@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import json
+from dataclasses import MISSING
 from dataclasses import fields, is_dataclass
 from typing import Any
 
@@ -27,7 +29,12 @@ def _collect_dataclass_fields(
 
     for f in fields(dataclass_cls):
         key = f"{prefix}{f.name}" if prefix else f.name
-        default = f.default if f.default is not None else (f.default_factory() if callable(f.default_factory) else "")
+        if f.default is not MISSING:
+            default = f.default
+        elif f.default_factory is not MISSING:  # type: ignore[attr-defined]
+            default = f.default_factory()  # type: ignore[misc]
+        else:
+            default = ""
 
         # skip internal / private fields
         if f.name.startswith("_") or key.startswith("_"):
@@ -57,6 +64,9 @@ def _collect_dataclass_fields(
         elif isinstance(default, float):
             vt = "float"
             val = str(default)
+        elif isinstance(default, (list, dict)):
+            vt = "json"
+            val = json.dumps(default, ensure_ascii=False)
         else:
             vt = "str"
             val = str(default) if default else ""

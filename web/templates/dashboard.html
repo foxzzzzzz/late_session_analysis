@@ -36,7 +36,7 @@
         </div>
     </div>
     <div class="col-6 col-md-3 col-lg-2">
-        <div class="stat-card {{ 'danger' if stats.cumulative_return > 0 else 'success' }}">
+        <div class="stat-card {{ 'success' if stats.cumulative_return > 0 else 'danger' if stats.cumulative_return < 0 else '' }}">
             <div class="stat-label">模拟累计收益</div>
             <div class="stat-value {{ 'pnl-up' if stats.cumulative_return > 0 else 'pnl-down' if stats.cumulative_return < 0 else '' }}">
                 {{ '+' if stats.cumulative_return > 0 else '' }}{{ stats.cumulative_return }}%

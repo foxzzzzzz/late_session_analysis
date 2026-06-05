@@ -90,8 +90,9 @@ def close_trade(trade_id: int):
     try:
         from data_provider.kline_provider import KlineProvider
         kline = KlineProvider()
-        bars = kline.load_daily(trade.recommendation.code)
-        if not bars.empty:
+        daily = kline.load_daily_batch([trade.recommendation.code], bars=5)
+        bars = daily.get(trade.recommendation.code)
+        if bars is not None and not bars.empty:
             latest = bars.iloc[-1]
             trade.exit_price = float(latest["close"])
             trade.return_pct = round(

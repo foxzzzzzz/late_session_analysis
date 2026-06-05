@@ -54,20 +54,24 @@ class BacktestService:
 
         self._emit("BT", "INFO", f"Starting backtest: {sd} → {ed}, type={backtest_type}, flow={capital_flow_mode}, regime={regime}")
 
+        if backtest_type == "live_replay":
+            return {
+                "status": "error",
+                "error": "live_replay snapshot execution is not implemented yet; use historical/proxy until replay loader is wired",
+            }
+
         # Build config
         try:
             config = BacktestConfig()
-            config.start_date = start_date
-            config.end_date = end_date
-            config.backtest_type = backtest_type
-            config.capital_flow_mode = capital_flow_mode
-            config.max_positions = max_positions
 
-            if regime and regime != "auto":
-                config.regime_mode = regime
-
-            # Override from DB
+            # Apply DB overrides FIRST (so API params can override them)
+            _skipped_keys = {
+                "start_date", "end_date", "backtest_type", "capital_flow_mode",
+                "regime_mode", "max_positions",
+            }
             for row in DbConfig.query.filter(DbConfig.category.like("threshold_backtest%")).all():
+                if row.key in _skipped_keys:
+                    continue  # skip date/type keys, API params win
                 try:
                     current = getattr(config, row.key, None)
                     if current is not None:
@@ -77,10 +81,22 @@ class BacktestService:
                             setattr(config, row.key, int(row.value))
                         elif row.value_type == "bool":
                             setattr(config, row.key, row.value.lower() in ("true", "1", "yes"))
+                        elif row.value_type == "json":
+                            setattr(config, row.key, json.loads(row.value) if row.value else None)
                         else:
                             setattr(config, row.key, row.value)
                 except (ValueError, TypeError):
                     pass
+
+            # API parameters OVERRIDE DB defaults
+            config.start_date = start_date
+            config.end_date = end_date
+            config.backtest_type = backtest_type
+            config.capital_flow_mode = capital_flow_mode
+            config.max_positions = max_positions
+
+            if regime and regime != "auto":
+                config.regime_mode = regime
 
             self._emit("BT", "INFO", "BacktestConfig created with DB overrides")
         except Exception as e:
@@ -93,7 +109,7 @@ class BacktestService:
             self._emit("BT", "INFO", "Initializing BacktestEngine...")
             engine = BacktestEngine(config)
             self._emit("BT", "INFO", "Running backtest (this may take several minutes)...")
-            engine.run()
+            engine_result = engine.run()
             self._emit("BT", "INFO", "Backtest execution complete")
         except Exception as e:
             self._emit("BT", "ERROR", f"Backtest engine failed: {e}")
@@ -103,9 +119,13 @@ class BacktestService:
 
         # Extract results
         try:
-            summary = _extract_summary(engine)
+            summary = _extract_summary(engine, engine_result)
             output_dir = str(getattr(config, "output_dir", "./backtest_reports"))
-            trades_count = len(getattr(engine, "_day_results", []))
+            trade_log = getattr(engine, "trade_log", None)
+            if trade_log and hasattr(trade_log, "closed_trades"):
+                trades_count = len(trade_log.closed_trades())
+            else:
+                trades_count = int(engine_result.get("total_trades", 0)) if isinstance(engine_result, dict) else 0
 
             self._emit("BT", "INFO",
                        f"Results: {trades_count} trades, "
@@ -123,9 +143,23 @@ class BacktestService:
             return {"status": "completed", "summary": {}, "output_dir": "", "trades_count": 0}
 
 
-def _extract_summary(engine) -> dict:
+def _extract_summary(engine, engine_result: dict | None = None) -> dict:
     """Extract performance summary from a completed BacktestEngine."""
     summary: dict = {}
+
+    engine_result = engine_result or {}
+    metrics = engine_result.get("metrics", {}) if isinstance(engine_result, dict) else {}
+    if metrics:
+        summary.update({
+            "total_trades": metrics.get("total_trades", 0),
+            "win_rate": metrics.get("win_rate", 0),
+            "cumulative_return": metrics.get("total_return_pct", 0),
+            "sharpe_ratio": metrics.get("sharpe_ratio", 0),
+            "max_drawdown": metrics.get("max_drawdown_pct", 0),
+            "calmar_ratio": metrics.get("calmar_ratio", 0),
+            "profit_factor": metrics.get("profit_factor", 0),
+            "avg_return": metrics.get("avg_return_pct", 0),
+        })
 
     try:
         if hasattr(engine, "_performance") and engine._performance:
@@ -141,12 +175,12 @@ def _extract_summary(engine) -> dict:
     except Exception:
         summary["note"] = "Performance object not fully parsed"
 
-    # Also try to get summary from day results
+    # Also try to get summary from trade_log
     try:
-        day_results = getattr(engine, "_day_results", []) or []
-        if day_results:
+        trade_log = getattr(engine, "trade_log", None)
+        if trade_log and hasattr(trade_log, "days"):
             trades = []
-            for dr in day_results:
+            for dr in trade_log.days:
                 if hasattr(dr, "trades"):
                     trades.extend(dr.trades)
             if trades:

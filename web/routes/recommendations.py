@@ -88,8 +88,9 @@ def update_tracking(rec_id: int):
     try:
         from data_provider.kline_provider import KlineProvider
         kline = KlineProvider()
-        bars = kline.load_daily(rec.code)
-        if not bars.empty:
+        daily = kline.load_daily_batch([rec.code], bars=5)
+        bars = daily.get(rec.code)
+        if bars is not None and not bars.empty:
             latest = bars.iloc[-1]
             close = float(latest["close"])
             return_pct = round((close - rec.entry_price) / rec.entry_price * 100, 2)

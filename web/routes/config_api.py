@@ -42,19 +42,22 @@ def save():
                 row.value = str(data[key])
     db.session.commit()
 
-    # Also update .env file so existing pipeline code sees the change
-    _update_env_file(data)
+    # Also update .env file so existing pipeline code sees the change.
+    # In Docker this file may be mounted read-only, so DB remains source of truth.
+    env_synced = _update_env_file(data)
 
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "env_synced": env_synced})
 
 
-def _update_env_file(data: dict) -> None:
+def _update_env_file(data: dict) -> bool:
     """Write API key changes back to .env for CLI compatibility."""
     from pathlib import Path
 
-    env_path = Path(".env")
+    # Resolve relative to project root (parent of web/ directory)
+    _project_root = Path(__file__).resolve().parent.parent.parent
+    env_path = _project_root / ".env"
     if not env_path.exists():
-        return
+        return False
 
     lines = env_path.read_text(encoding="utf-8").splitlines()
     updated: set[str] = set()
@@ -84,4 +87,8 @@ def _update_env_file(data: dict) -> None:
             env_var = key.upper()
             new_lines.append(f"{env_var}={data[key]}")
 
-    env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    try:
+        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+        return True
+    except OSError:
+        return False

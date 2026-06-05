@@ -472,7 +472,7 @@ pytest tests/test_layer1_access.py -v
 | `historical_backtest` | 历史近似回测，用于规则初筛和参数大方向 | 历史日线/5分钟线 + 可选 proxy 资金流 |
 | `live_replay_backtest` | 实盘快照回放，用于验证真实上线表现 | `live_snapshots/YYYYMMDD/S1-S4/*.jsonl` |
 
-> `live_replay_backtest` 的有效起点是开始沉淀实盘快照的交易日；没有快照的历史日期只能使用 `historical_backtest`。
+> `live_replay_backtest` 的有效起点是开始沉淀实盘快照的交易日；没有快照的历史日期只能使用 `historical_backtest`。当前版本已完成快照沉淀和报告口径拆分，但快照重放执行器尚未接入，`live_replay` 会明确拒绝执行，避免把历史近似结果误标为真实回放。
 
 ### 快速开始
 
@@ -483,7 +483,7 @@ python main_backtest.py
 # 历史近似回测：建议用 proxy 资金流，按决策时间截断5分钟线
 python main_backtest.py --backtest-type historical --start 20260401 --end 20260515 --capital-flow-mode proxy --decision-time 14:57
 
-# 实盘快照回放：仅适用于已有 live_snapshots 的日期
+# 实盘快照回放：预留入口，待快照重放执行器接入后使用
 python main_backtest.py --backtest-type live_replay --start 20260604 --end 20260630 --capital-flow-mode replay --live-snapshot-dir ./live_snapshots --decision-time 14:57
 
 # 自定义板块 + 强制刷新缓存

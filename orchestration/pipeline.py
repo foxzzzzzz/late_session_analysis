@@ -277,6 +277,7 @@ class LateSessionPipeline:
             # === S4: L4多轮评分 + LLM (每10秒循环, 14:55-14:58) ===
             if 4 in stages:
                 top30 = self._run_stage4(l3_passed)
+                self.top30 = top30  # expose for web dashboard
 
             self.tracker.finish()
 

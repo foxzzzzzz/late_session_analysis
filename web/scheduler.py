@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, date
 from flask import Flask
 
@@ -19,6 +20,10 @@ def init_scheduler(app: Flask) -> None:
 
     Called from app factory after DB is ready.
     """
+    if os.getenv("WEB_SCHEDULER_ENABLED", "true").lower() not in ("true", "1", "yes"):
+        app.logger.info("APScheduler disabled by WEB_SCHEDULER_ENABLED")
+        return
+
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
     except ImportError:

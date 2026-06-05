@@ -45,6 +45,14 @@ def create_app() -> Flask:
         except (TypeError, _json.JSONDecodeError):
             return {}
 
+    @app.template_filter("fmt")
+    def fmt_filter(value, spec=".2f"):
+        """Format a number: {{ 3.14159 | fmt('.2f') }} → '3.14'."""
+        try:
+            return format(float(value), spec)
+        except (ValueError, TypeError):
+            return str(value)
+
     # ── db ──────────────────────────────────────────────────
     init_db(app)
 

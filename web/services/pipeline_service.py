@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from datetime import datetime, date
 from typing import Callable
 
@@ -50,6 +51,8 @@ class PipelineService:
                         setattr(config, row.key, int(row.value))
                     elif row.value_type == "bool":
                         setattr(config, row.key, row.value.lower() in ("true", "1", "yes"))
+                    elif row.value_type == "json":
+                        setattr(config, row.key, json.loads(row.value) if row.value else None)
                     else:
                         setattr(config, row.key, row.value)
                     count += 1
@@ -85,16 +88,16 @@ class PipelineService:
 
         # Stage pass counts from tracker
         stages = {}
-        if hasattr(pipeline, "_tracker") and pipeline._tracker:
-            tracker = pipeline._tracker
+        if hasattr(pipeline, "tracker") and pipeline.tracker:
+            tracker = pipeline.tracker
             for s in ["S0", "S1", "S2", "S3", "S4"]:
                 stages[s] = getattr(tracker, f"{s.lower()}_pass", 0)
 
         # Recommendations from the last S4 run
         recommendations = []
-        if hasattr(pipeline, "_final_top30") and pipeline._final_top30:
-            for ctx in pipeline._final_top30:
-                level = ctx.recommendation_level or "watch"
+        if hasattr(pipeline, "top30") and pipeline.top30:
+            for ctx in pipeline.top30:
+                level = ctx.recommendation or "watch"
                 if level in ("strong_buy", "buy", "watch"):
                     recommendations.append({
                         "code": ctx.code,

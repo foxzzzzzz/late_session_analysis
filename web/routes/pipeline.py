@@ -4,8 +4,8 @@ import json
 import queue
 import threading
 from datetime import datetime, date
-from flask import Blueprint, render_template, request, Response, jsonify
-from web.models import db, PipelineRun, PipelineLog
+from flask import Blueprint, render_template, request, Response, jsonify, current_app
+from web.models import db, PipelineRun, PipelineLog, DailyRecommendation, SimulatedTrade
 
 bp = Blueprint("pipeline", __name__)
 
@@ -35,42 +35,42 @@ def _log_handler(run_id: int, stage: str, level: str, message: str):
         q.put({"stage": stage, "level": level, "message": message})
 
 
-def _run_pipeline_in_thread(run_id: int, test_mode: bool = True):
+def _run_pipeline_in_thread(app, run_id: int, test_mode: bool = True):
     """Execute the real pipeline in a background thread."""
     from web.services.pipeline_service import PipelineService, save_pipeline_results
 
     def on_log(stage: str, level: str, message: str):
         _log_handler(run_id, stage, level, message)
 
-    service = PipelineService(log_callback=on_log)
+    with app.app_context():
+        service = PipelineService(log_callback=on_log)
 
-    try:
-        results = service.run(test_mode=test_mode)
+        try:
+            results = service.run(test_mode=test_mode)
 
-        # Save results to DB
-        save_pipeline_results(run_id, results)
+            # Save results to DB
+            save_pipeline_results(run_id, results)
 
-        # Update run status
-        run = db.session.get(PipelineRun, run_id)
-        if run:
-            run.status = "completed"
-            run.finished_at = datetime.now()
-            db.session.commit()
+            # Update run status
+            run = db.session.get(PipelineRun, run_id)
+            if run:
+                run.status = "completed"
+                run.finished_at = datetime.now()
+                db.session.commit()
 
-    except Exception as e:
-        _log_handler(run_id, "SYS", "ERROR", f"Pipeline thread crashed: {e}")
-        import traceback
-        _log_handler(run_id, "SYS", "ERROR", traceback.format_exc()[-300:])
-        run = db.session.get(PipelineRun, run_id)
-        if run:
-            run.status = "failed"
-            run.finished_at = datetime.now()
-            db.session.commit()
-    finally:
-        # Clean up queue after a delay
-        import time
-        time.sleep(2)
-        _log_queues.pop(run_id, None)
+        except Exception as e:
+            _log_handler(run_id, "SYS", "ERROR", f"Pipeline thread crashed: {e}")
+            import traceback
+            _log_handler(run_id, "SYS", "ERROR", traceback.format_exc()[-300:])
+            run = db.session.get(PipelineRun, run_id)
+            if run:
+                run.status = "failed"
+                run.finished_at = datetime.now()
+                db.session.commit()
+        finally:
+            import time
+            time.sleep(2)
+            _log_queues.pop(run_id, None)
 
 
 @bp.route("/")
@@ -110,26 +110,40 @@ def run_pipeline():
     test_mode = request.json.get("test_mode", True) if request.json else True
     today = date.today()
 
-    # Check if already run today
+    # Check if already run today. Completed/running runs are protected, failed runs
+    # can be retried by reusing the same unique trading_date row.
     existing = PipelineRun.query.filter_by(trading_date=today).first()
-    if existing:
+    if existing and existing.status in ("running", "completed", "pending"):
         return jsonify({"status": "error", "message": f"Pipeline already ran today ({today})"}), 409
-
-    run = PipelineRun(
-        trading_date=today,
-        status="running",
-        started_at=datetime.now(),
-    )
-    db.session.add(run)
+    if existing:
+        old_recs = DailyRecommendation.query.filter_by(run_id=existing.id).all()
+        old_rec_ids = [rec.id for rec in old_recs]
+        if old_rec_ids:
+            SimulatedTrade.query.filter(SimulatedTrade.recommendation_id.in_(old_rec_ids)).delete(synchronize_session=False)
+        DailyRecommendation.query.filter_by(run_id=existing.id).delete(synchronize_session=False)
+        PipelineLog.query.filter_by(run_id=existing.id).delete(synchronize_session=False)
+        existing.status = "running"
+        existing.started_at = datetime.now()
+        existing.finished_at = None
+        existing.stages_json = None
+        run = existing
+    else:
+        run = PipelineRun(
+            trading_date=today,
+            status="running",
+            started_at=datetime.now(),
+        )
+        db.session.add(run)
     db.session.commit()
 
     # Create queue for this run
     _log_queues[run.id] = queue.Queue()
 
-    # Start background thread
+    # Start background thread with app context
+    app = current_app._get_current_object()
     thread = threading.Thread(
         target=_run_pipeline_in_thread,
-        args=(run.id, test_mode),
+        args=(app, run.id, test_mode),
         daemon=True,
     )
     thread.start()

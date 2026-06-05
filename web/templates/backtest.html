@@ -163,19 +163,52 @@
             });
             const result = await resp.json();
             if (result.status === 'ok') {
-                btLog('回测完成 (stub — 完整实现在 Phase 5)');
-                document.getElementById('bt-terminal-status').textContent = '已完成';
-                setTimeout(() => location.reload(), 1500);
+                btLog(`回测任务已创建: #${result.run_id}`);
+                pollBacktest(result.run_id);
+            } else {
+                btLog('ERROR: ' + (result.message || '启动失败'));
+                document.getElementById('bt-terminal-status').textContent = '失败';
+                resetBacktestButton();
             }
         } catch (e) {
             btLog('ERROR: ' + e.message);
             document.getElementById('bt-terminal-status').textContent = '失败';
+            resetBacktestButton();
         }
+    }
 
-        setTimeout(() => {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-play-fill me-1"></i>开始回测';
-        }, 3000);
+    async function pollBacktest(runId) {
+        try {
+            const resp = await fetch(`/backtest/status/${runId}`);
+            const data = await resp.json();
+            if (data.status === 'completed') {
+                btLog('回测完成');
+                if (data.summary && Object.keys(data.summary).length) {
+                    btLog(`交易=${data.summary.total_trades || 0}, 胜率=${data.summary.win_rate || 0}%, 累计=${data.summary.cumulative_return || 0}%`);
+                }
+                document.getElementById('bt-terminal-status').textContent = '已完成';
+                setTimeout(() => location.href = `/backtest/${runId}`, 1200);
+                return;
+            }
+            if (data.status === 'failed' || data.status === 'error') {
+                btLog('ERROR: 回测失败，请查看详情页摘要');
+                document.getElementById('bt-terminal-status').textContent = '失败';
+                resetBacktestButton();
+                return;
+            }
+            btLog(`状态: ${data.status}`);
+            setTimeout(() => pollBacktest(runId), 2000);
+        } catch (e) {
+            btLog('ERROR: 状态查询失败: ' + e.message);
+            document.getElementById('bt-terminal-status').textContent = '失败';
+            resetBacktestButton();
+        }
+    }
+
+    function resetBacktestButton() {
+        const btn = document.getElementById('bt-run-btn');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-play-fill me-1"></i>开始回测';
     }
 </script>
 {% endblock %}
