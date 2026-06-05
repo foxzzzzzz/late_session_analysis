@@ -606,12 +606,203 @@ late_session_analysis/
     report_generator.py           # CSV/JSON/Markdown 报告
   analysis/                       # LLM + 规则评分
     ...
+  web/                            # Web Dashboard
+    app.py                        # Flask 应用工厂
+    models.py                     # SQLAlchemy 模型 (7张表)
+    scheduler.py                  # APScheduler 14:29 + 15:30
+    db.py                         # DB 初始化 + SystemConfig 种子数据
+    routes/                       # 路由 (仪表盘/配置/管线/推荐/模拟/回测)
+    services/                     # 服务层 (管线/回测/模拟/快照)
+    templates/                    # Jinja2 模板 (暗色主题)
+    static/                       # CSS/JS
   report/                         # 报告
     ...
   orchestration/                  # 编排
     ...
-  tests/                          # 单元测试 (121个)
+  tests/                          # 单元测试
 ```
+
+## Web Dashboard (Web GUI)
+
+Flask + SQLite + Jinja2 构建的 Web 管理面板，提供可视化配置、管线执行、推荐追踪、模拟交易、回测系统等功能。与本地 CLI 完全解耦，通过导入现有模块复用筛选管线。
+
+### 快速启动 (本地)
+
+```bash
+# 安装 Web 依赖
+pip install flask flask-sqlalchemy apscheduler
+
+# 启动 Web 服务
+python -m web.app --port 5000
+
+# 浏览器打开
+http://localhost:5000
+```
+
+### 页面功能
+
+| 页面 | 路由 | 功能 |
+|------|------|------|
+| 仪表盘 | `/` | 市场状态、今日推荐摘要、累计胜率/收益、Live Snapshot 统计、调度器状态 |
+| 阈值配置 | `/config` | S0~S4 实盘/回测阈值展示编辑，牛熊市 regime 覆盖值，DB 持久化 |
+| API Key 配置 | `/config/api` | LLM API Key、Base URL、Model 配置，自动同步写入 .env |
+| 管线执行 | `/pipeline` | 快速测试(单轮) / 完整执行(多轮循环) + SSE 实时日志流 |
+| 推荐追踪 | `/recommendations` | 按日期查看推荐股票及后续涨跌幅追踪 |
+| 模拟交易 | `/simulation` | 模拟账户概览、持仓盈亏、止盈止损自动交割 |
+| 回测系统 | `/backtest` | 回测参数配置、执行、结果展示（胜率/夏普/回撤/收益曲线） |
+
+### 自动调度
+
+APScheduler 每日自动触发：
+- **14:29** — 完整管线执行 (S0→S4，多轮循环)
+- **15:30** — 持仓盈亏更新 + 推荐追踪更新
+
+通过环境变量控制：
+```bash
+# 禁用自动调度 (调试时使用)
+export WEB_SCHEDULER_ENABLED=false
+```
+
+---
+
+## 云服务器部署
+
+以下以 Ubuntu 22.04 为例，其他 Linux 发行版类似。
+
+### 环境要求
+
+- Linux 服务器 (推荐 2核4G 以上)
+- Python 3.11+
+- Docker & Docker Compose (可选，推荐)
+
+### 方式一：Docker 部署 (推荐)
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/foxzzzzzz/late_session_analysis.git
+cd late_session_analysis
+
+# 2. 配置 API Key
+cp .env.example .env
+nano .env   # 填入 LLM_API_KEY=sk-xxx
+
+# 3. 启动
+docker-compose up -d
+
+# 4. 查看日志
+docker-compose logs -f
+
+# 5. 访问
+# http://<服务器IP>:5000
+```
+
+**docker-compose.yml 持久化卷说明：**
+
+| 卷 | 用途 |
+|------|------|
+| `./live_snapshots` | 每日管线快照 (Live Replay 回测数据源) |
+| `./reports` | CLI 生成的 Markdown 报告 |
+| `./backtest_reports` | 回测结果 CSV/JSON/Markdown |
+| `./backtest_cache` | 回测缓存 (parquet 文件) |
+| `./web_instance` | Web Dashboard SQLite 数据库 |
+| `./.env` | 只读挂载，保护 API Key |
+
+### 方式二：直接部署
+
+```bash
+# 1. 安装系统依赖
+sudo apt update && sudo apt install -y python3 python3-pip
+
+# 2. 克隆并安装
+git clone https://github.com/foxzzzzzz/late_session_analysis.git
+cd late_session_analysis
+pip install -r requirements.txt -r web/requirements-web.txt
+
+# 3. 配置
+cp .env.example .env
+nano .env
+
+# 4. 使用 systemd 管理服务
+sudo nano /etc/systemd/system/late-session.service
+```
+
+**systemd 配置 (`/etc/systemd/system/late-session.service`):**
+
+```ini
+[Unit]
+Description=Late Session Analysis Web Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/late_session_analysis
+ExecStart=/usr/bin/python3 -m web.app --port 5000
+Restart=always
+RestartSec=10
+Environment=TZ=Asia/Shanghai
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# 启动服务
+sudo systemctl daemon-reload
+sudo systemctl enable late-session
+sudo systemctl start late-session
+
+# 查看状态
+sudo systemctl status late-session
+```
+
+### 方式三：使用外部 cron + CLI (无 Web GUI)
+
+如果只需要每日自动跑 CLI 管线，不需要 Web GUI：
+
+```bash
+# 添加 crontab (每个交易日 14:29)
+crontab -e
+# 添加: 29 14 * * 1-5 cd /path/to/project && python main.py >> logs/daily.log 2>&1
+```
+
+### 安全建议
+
+1. **不要暴露 5000 端口到公网** — 使用 Nginx 反向代理 + HTTPS
+2. **API Key 安全** — `.env` 已加入 `.gitignore`，不要提交到 Git
+3. **防火墙** — 仅开放 80/443 端口，5000 仅本地监听
+
+**Nginx 反向代理配置 (可选):**
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;           # SSE 需要关闭缓冲
+        proxy_cache off;
+    }
+}
+```
+
+### 验证部署
+
+```bash
+# 健康检查
+curl http://localhost:5000/
+
+# 查看管线执行页
+curl http://localhost:5000/pipeline/
+
+# Docker 查看日志
+docker-compose logs -f late-session
+```
+
+---
 
 ## 数据源说明
 
