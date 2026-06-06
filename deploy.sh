@@ -138,6 +138,14 @@ for d in web_instance reports backtest_reports backtest_cache live_snapshots; do
     mkdir -p "$APP_DIR/$d" && log_info "  $d/"
 done
 
+# 修复权限: 确保 admin 用户可读写所有文件
+if id admin &>/dev/null; then
+    chown -R admin:admin "$APP_DIR" 2>/dev/null && log_info "权限已修正 (admin:admin)" || log_warn "chown 失败，请手动执行: sudo chown -R admin:admin $APP_DIR"
+    chown -R admin:admin "$VENV_DIR" 2>/dev/null
+else
+    log_warn "admin 用户不存在，跳过 chown"
+fi
+
 # ── 6. systemd 服务 ──────────────────────────────────────
 log_step "6/6 配置 systemd"
 
