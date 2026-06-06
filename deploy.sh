@@ -8,6 +8,7 @@
 set -e
 
 APP_DIR="/home/admin/late_session_analysis"
+VENV_DIR="$APP_DIR/.venv"
 REPO_URL="https://github.com/foxzzzzzz/late_session_analysis.git"
 PORT=5000
 HAS_ERROR=0
@@ -45,6 +46,17 @@ python3 -c "import ensurepip" 2>/dev/null && log_info "pip: OK" || {
     }
 }
 
+# 检查/创建虚拟环境
+if [ ! -f "$VENV_DIR/bin/python" ]; then
+    log_info "创建 Python 虚拟环境..."
+    python3 -m venv "$VENV_DIR" 2>&1 || {
+        log_error "创建虚拟环境失败，尝试安装 python3-venv: sudo apt install python3-venv"
+        exit 1
+    }
+fi
+PIP="$VENV_DIR/bin/pip"
+PYTHON="$VENV_DIR/bin/python"
+log_info "虚拟环境: $VENV_DIR"
 log_info "当前用户: $(whoami)"
 log_info "工作目录: $APP_DIR"
 
@@ -78,20 +90,21 @@ log_step "3/6 安装 Python 依赖"
 
 cd "$APP_DIR"
 
-# 检查关键依赖是否已安装
+# 检查关键依赖是否已安装 (使用虚拟环境)
 MISSING_DEPS=""
-python3 -c "import flask" 2>/dev/null || MISSING_DEPS="$MISSING_DEPS flask"
-python3 -c "import apscheduler" 2>/dev/null || MISSING_DEPS="$MISSING_DEPS apscheduler"
+$PYTHON -c "import flask" 2>/dev/null || MISSING_DEPS="$MISSING_DEPS flask"
+$PYTHON -c "import apscheduler" 2>/dev/null || MISSING_DEPS="$MISSING_DEPS apscheduler"
 
 if [ -z "$MISSING_DEPS" ]; then
     log_info "Web 依赖已安装，跳过"
 else
-    log_info "安装缺失依赖: $MISSING_DEPS"
-    pip3 install -r requirements.txt 2>&1 && log_info "基础依赖安装 OK" || {
-        log_error "基础依赖安装失败，请检查 pip 配置"
+    log_info "在虚拟环境中安装依赖..."
+    $PIP install --upgrade pip -q 2>&1
+    $PIP install -r requirements.txt 2>&1 && log_info "基础依赖安装 OK" || {
+        log_error "基础依赖安装失败"
         exit 1
     }
-    pip3 install -r web/requirements-web.txt 2>&1 && log_info "Web 依赖安装 OK" || {
+    $PIP install -r web/requirements-web.txt 2>&1 && log_info "Web 依赖安装 OK" || {
         log_error "Web 依赖安装失败"
         exit 1
     }
@@ -146,7 +159,7 @@ After=network.target
 Type=simple
 User=admin
 WorkingDirectory=$APP_DIR
-ExecStart=/usr/bin/python3 -m web.app --host 0.0.0.0 --port $PORT
+ExecStart=$VENV_DIR/bin/python -m web.app --host 0.0.0.0 --port $PORT
 Restart=always
 RestartSec=10
 Environment=TZ=Asia/Shanghai
