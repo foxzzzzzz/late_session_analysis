@@ -233,8 +233,10 @@ def stream(run_id: int):
     run = db.session.get(PipelineRun, run_id)
     if run and run.status in ("running",) and PipelineLog.query.filter_by(run_id=run_id).count() == 0:
         # Fresh run: execute pipeline inline while streaming
+        # Pass the actual app object so background thread doesn't need current_app
+        _app = current_app._get_current_object()
         return Response(
-            _stream_and_run(run_id, q, run),
+            _stream_and_run(_app, run_id, q, run),
             mimetype="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
         )
@@ -246,7 +248,7 @@ def stream(run_id: int):
     )
 
 
-def _stream_and_run(run_id: int, q: queue.Queue, run: PipelineRun):
+def _stream_and_run(app, run_id: int, q: queue.Queue, run: PipelineRun):
     """Run pipeline in a thread, stream SSE with heartbeat polling."""
     import traceback as _tb
     from web.services.pipeline_service import PipelineService, save_pipeline_results
@@ -258,7 +260,6 @@ def _stream_and_run(run_id: int, q: queue.Queue, run: PipelineRun):
     finished = threading.Event()
 
     def _run():
-        app = current_app._get_current_object()
         with app.app_context():
             from web.models import db as _db, PipelineLog as _PL, PipelineRun as _PR
 
