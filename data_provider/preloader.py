@@ -38,12 +38,13 @@ class DataPreloader:
 
         self._loaded = True
         elapsed = time.time() - t0
+        kline_count = len(self.daily_kline) if self.daily_kline is not None else 0
         logger.info(
             f"预加载完成 ({elapsed:.1f}s): "
             f"{len(self.sector_performance)} 行业行情, "
             f"{len(self.unlock_stocks)} 只待解禁, "
             f"{len(self.hot_concepts)} 只题材标签, "
-            f"{len(self.daily_kline)} 只K线"
+            f"{kline_count} 只K线"
         )
 
     # === 同花顺行业对比 (替代buggy akshare) ===
@@ -140,9 +141,14 @@ class DataPreloader:
             if df is not None and not df.empty:
                 self.daily_kline = df
                 logger.info(f"mootdx K线测试: {len(df)} 条 (000001)")
+            else:
+                self.daily_kline = pd.DataFrame()  # fallback empty
+                logger.warning("mootdx K线返回空数据")
         except ImportError:
+            self.daily_kline = pd.DataFrame()
             logger.info("mootdx 未安装，K线数据跳过 (pip install mootdx)")
         except Exception as e:
+            self.daily_kline = pd.DataFrame()
             logger.warning(f"mootdx K线加载失败: {e}")
 
     # === 同花顺热点归因 (题材标签) ===
