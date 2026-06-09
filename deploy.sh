@@ -110,8 +110,37 @@ else
     }
 fi
 
-# ── 4. 配置环境变量 ──────────────────────────────────────
-log_step "4/6 配置环境变量"
+# ── 4. 检测 TDX 服务器 ───────────────────────────────────
+log_step "4/7 检测 TDX 服务器 (mootdx)"
+
+MOOTDX_CFG="$HOME/.mootdx/config.json"
+if [ -f "$MOOTDX_CFG" ]; then
+    log_info "mootdx 配置已存在，跳过检测"
+else
+    log_info "扫描可用的 TDX 服务器..."
+    TDX_OK=$($PYTHON -c "
+import socket, json, os
+from tdxpy.constants import hq_hosts
+for name, addr, port in hq_hosts[:50]:
+    try:
+        s = socket.socket(); s.settimeout(2)
+        s.connect((addr, port)); s.close()
+        cfg = {'SERVER': {'HQ': [['auto', addr, port]]}, 'BESTIP': {'HQ': [addr, port], 'EX': '', 'GP': ''}}
+        os.makedirs(os.path.expanduser('~/.mootdx'), exist_ok=True)
+        json.dump(cfg, open(os.path.expanduser('~/.mootdx/config.json'), 'w'))
+        print(f'{addr}:{port}')
+        break
+    except: pass
+" 2>&1)
+    if [ -n "$TDX_OK" ]; then
+        log_info "TDX 服务器可用: $TDX_OK"
+    else
+        log_warn "所有 TDX 服务器不可达，K线将自动降级到 Sina HTTP"
+    fi
+fi
+
+# ── 5. 配置环境变量 ──────────────────────────────────────
+log_step "5/7 配置环境变量"
 
 if [ ! -f "$APP_DIR/.env" ]; then
     if [ -f "$APP_DIR/.env.example" ]; then
@@ -132,7 +161,7 @@ else
 fi
 
 # ── 5. 创建数据目录 ──────────────────────────────────────
-log_step "5/6 创建数据目录"
+log_step "6/7 创建数据目录"
 
 for d in web_instance reports backtest_reports backtest_cache live_snapshots; do
     mkdir -p "$APP_DIR/$d" && log_info "  $d/"
@@ -147,7 +176,7 @@ else
 fi
 
 # ── 6. systemd 服务 ──────────────────────────────────────
-log_step "6/6 配置 systemd"
+log_step "7/7 配置 systemd"
 
 SERVICE_NAME="late-session"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
