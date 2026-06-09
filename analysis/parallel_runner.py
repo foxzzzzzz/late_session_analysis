@@ -6,6 +6,7 @@
 降级标记: 结果中 fallback=True 表示该标的未经过LLM分析
 """
 import json
+import re
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
@@ -108,15 +109,35 @@ class ParallelLLMRunner:
         except json.JSONDecodeError:
             pass
 
-        # 尝试从文本中提取JSON
+        # 尝试从文本中提取JSON — 优先搜索 {"decision"
         if data is None:
-            try:
+            candidates = []
+            # Strategy 1: find JSON object starting with {"decision"
+            idx = response.find('{"decision"')
+            if idx >= 0:
+                end = response.find('}', response.rfind('}')) + 1
+                if end > idx:
+                    candidates.append(response[idx:end])
+            # Strategy 2: find {"decision" with possible whitespace
+            for m in re.finditer(r'\{\s*"decision"\s*:', response):
+                idx = m.start()
+                end = response.rfind('}') + 1
+                if end > idx:
+                    candidates.append(response[idx:end])
+                    break
+            # Strategy 3: first { to last }
+            if not candidates:
                 start = response.find('{')
                 end = response.rfind('}') + 1
                 if start >= 0 and end > start:
-                    data = json.loads(response[start:end])
-            except (json.JSONDecodeError, KeyError):
-                pass
+                    candidates.append(response[start:end])
+
+            for candidate in candidates:
+                try:
+                    data = json.loads(candidate)
+                    break
+                except json.JSONDecodeError:
+                    continue
 
         # 尝试修复截断的JSON (LLM输出被截断时常见)
         if data is None:

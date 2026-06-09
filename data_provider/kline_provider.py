@@ -46,11 +46,41 @@ class KlineProvider:
 
     @property
     def client(self):
-        """Lazy mootdx client — returns None if TCP unreachable (cloud server, etc)."""
+        """Lazy mootdx client — returns None if TCP unreachable.
+
+        Set MOOTDX_SERVER env var to force a specific server: ip:port
+        Set MOOTDX_SERVER_LIMIT to increase probe count (default 5, max 50).
+        """
         if self._client is None and self._client_error is None:
             try:
                 from mootdx.quotes import Quotes
-                self._client = Quotes.factory(market=self._market)
+                import os as _os
+
+                server = None
+                server_env = _os.getenv("MOOTDX_SERVER", "")
+                if server_env and ":" in server_env:
+                    host, port = server_env.rsplit(":", 1)
+                    server = (host.strip(), int(port.strip()))
+                    logger.info(f"使用自定义 TDX 服务器: {server}")
+
+                if server:
+                    # Bypass server discovery — use the specified server
+                    self._client = Quotes.factory(market=self._market, server=server)
+                else:
+                    # Increase server probe limit for cloud environments
+                    limit = int(_os.getenv("MOOTDX_SERVER_LIMIT", "20"))
+                    from mootdx.quotes import Quotes as Q
+                    # Temporarily increase the limit via valid_server
+                    import mootdx.server as ms
+                    best = ms.server(index='HQ', limit=min(limit, 50), console=False, sync=True)
+                    best = best[0] if best else None
+                    if best and best.get('addr'):
+                        server = (best['addr'], best['port'])
+                        logger.info(f"mootdx 最佳服务器: {server} (响应 {best.get('time', '?')}ms)")
+                        self._client = Quotes.factory(market=self._market, server=server)
+                    else:
+                        # Last resort: try default factory
+                        self._client = Quotes.factory(market=self._market)
             except Exception as e:
                 self._client_error = str(e)
                 logger.warning(f"mootdx 不可用 (TCP 7709): {e}")
@@ -93,10 +123,10 @@ class KlineProvider:
             if self.client is not None:
                 try:
                     df = self.client.bars(symbol=code, frequency=9, offset=bars)
-                if df is not None and not df.empty:
-                    df = self._normalize_columns(df)
-            except Exception as e:
-                logger.debug(f"日线 mootdx 获取失败 {code}: {e}")
+                    if df is not None and not df.empty:
+                        df = self._normalize_columns(df)
+                except Exception as e:
+                    logger.debug(f"日线 mootdx 获取失败 {code}: {e}")
 
             # Sina HTTP 回退
             if df is None or df.empty:
