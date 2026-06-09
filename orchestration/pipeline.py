@@ -931,9 +931,10 @@ class LateSessionPipeline:
 
         today_str = datetime.now().strftime("%Y-%m-%d")
 
-        # 保存合并数据供 S3 回填 (三个源都可能有部分股票，合并而非二选一)
+        # 保存合并数据供 S3 回填 (增量更新，不覆盖已有数据)
         # push2his 仅保留当日数据 — 交易时段klt=101只有昨日数据，不能混入当日决策
-        self._fund_flow_data = {}
+        if not hasattr(self, '_fund_flow_data'):
+            self._fund_flow_data = {}
         all_codes = set()
         all_codes.update(minute_data.keys())
         all_codes.update(sina_data.keys())
@@ -951,16 +952,19 @@ class LateSessionPipeline:
             if hd:
                 sources_seen.append("push2his")
             # 合并: mainForce 优先分钟线 → 新浪 → push2his(仅当日)
-            self._fund_flow_data[code] = {
-                "mainForce": md.get("mainForce") or sd.get("mainForce") or hd_today.get("mainForce") or 0,
-                "active_buy_ratio": sd.get("active_buy_ratio") or hd_today.get("active_buy_ratio", 50.0),
-                "data_date": sd.get("data_date") or hd_today.get("data_date") or md.get("data_date", ""),
-                "sources_seen": sources_seen,
-                "fetched_at": datetime.now().isoformat(timespec="seconds"),
-                "is_realtime": any(
-                    d.get("data_date", "") == today_str for d in (md, sd) if d
-                ),
-            }
+            # 增量更新: 只在新数据有效时才更新, 避免API限流后稀疏数据覆盖好数据
+            main_force = md.get("mainForce") or sd.get("mainForce") or hd_today.get("mainForce") or 0
+            if main_force != 0 or code not in self._fund_flow_data:
+                self._fund_flow_data[code] = {
+                    "mainForce": main_force,
+                    "active_buy_ratio": sd.get("active_buy_ratio") or hd_today.get("active_buy_ratio", 50.0),
+                    "data_date": sd.get("data_date") or hd_today.get("data_date") or md.get("data_date", ""),
+                    "sources_seen": sources_seen,
+                    "fetched_at": datetime.now().isoformat(timespec="seconds"),
+                    "is_realtime": any(
+                        d.get("data_date", "") == today_str for d in (md, sd) if d
+                    ),
+                }
 
         # Sina双时间点差分: 每次刷新后计算最近区间增量并更新基线 (滚动基线，不累积)
         if sina_data:
