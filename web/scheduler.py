@@ -27,10 +27,11 @@ def _prepare_scheduled_run(today: date):
     from web.models import db, PipelineRun, PipelineLog, DailyRecommendation, SimulatedTrade
 
     existing = PipelineRun.query.filter_by(trading_date=today).first()
-    if existing and existing.status in ("running", "completed", "pending"):
-        return None, f"Pipeline already ran today ({today}), skipping"
+    if existing and existing.status in ("running", "pending"):
+        return None, f"Pipeline is already running today ({today})"
 
     if existing:
+        # Overwrite earlier completed/failed runs with fresh scheduled execution
         old_recs = DailyRecommendation.query.filter_by(run_id=existing.id).all()
         old_rec_ids = [rec.id for rec in old_recs]
         if old_rec_ids:
