@@ -219,8 +219,8 @@ def run_pipeline():
     # Verify queue works from main thread
     q.put({"stage": "SYS", "level": "INFO", "message": "Queue initialized"})
 
-    # Pipeline will be executed inline when the SSE stream connects.
-    # We just create the run record and queue — the stream endpoint does the work.
+    # Store test_mode in queue so stream endpoint can pick it up
+    q.put({"test_mode": test_mode})
 
     return jsonify({"status": "ok", "run_id": run.id})
 
@@ -258,6 +258,15 @@ def _stream_and_run(app, run_id: int, q: queue.Queue, run: PipelineRun):
 
     yield "event: connected\ndata: {}\n\n"
 
+    # Read test_mode from the queue (stored by run_pipeline)
+    test_mode = True
+    try:
+        meta = q.get_nowait()
+        if isinstance(meta, dict) and "test_mode" in meta:
+            test_mode = meta["test_mode"]
+    except queue.Empty:
+        pass
+
     # The pipeline runs in a thread and pushes to DB+queue via _emit callback.
     # The SSE generator polls the queue and sends heartbeats.
     finished = threading.Event()
@@ -281,7 +290,7 @@ def _stream_and_run(app, run_id: int, q: queue.Queue, run: PipelineRun):
 
             try:
                 service = PipelineService(log_callback=_emit)
-                results = service.run(test_mode=True)
+                results = service.run(test_mode=test_mode)
                 save_pipeline_results(run_id, results)
                 run_obj = _db.session.get(_PR, run_id)
                 if run_obj:
