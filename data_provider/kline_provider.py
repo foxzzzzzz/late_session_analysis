@@ -38,10 +38,23 @@ class KlineProvider:
     """
 
     def __init__(self, market: str = "std", cache_dir: str = "data/kline_cache"):
-        from mootdx.quotes import Quotes
-        self._client = Quotes.factory(market=market)
+        self._market = market
+        self._client = None  # lazy init — avoids crashing when mootdx TCP is unreachable
+        self._client_error = None
         self._cache_dir = cache_dir
         os.makedirs(self._cache_dir, exist_ok=True)
+
+    @property
+    def client(self):
+        """Lazy mootdx client — returns None if TCP unreachable (cloud server, etc)."""
+        if self._client is None and self._client_error is None:
+            try:
+                from mootdx.quotes import Quotes
+                self._client = Quotes.factory(market=self._market)
+            except Exception as e:
+                self._client_error = str(e)
+                logger.warning(f"mootdx 不可用 (TCP 7709): {e}")
+        return self._client
 
     # ================================================================
     # 数据获取
@@ -77,8 +90,9 @@ class KlineProvider:
 
             # 从 mootdx 获取
             df = None
-            try:
-                df = self._client.bars(symbol=code, frequency=9, offset=bars)
+            if self.client is not None:
+                try:
+                    df = self.client.bars(symbol=code, frequency=9, offset=bars)
                 if df is not None and not df.empty:
                     df = self._normalize_columns(df)
             except Exception as e:
@@ -170,11 +184,13 @@ class KlineProvider:
         result = {}
 
         def fetch_one(code: str):
+            if self.client is None:
+                return code, None
             code = str(code).zfill(6)
             last_error = None
             for attempt in range(2):
                 try:
-                    df = self._client.bars(symbol=code, frequency=0, offset=bars)
+                    df = self.client.bars(symbol=code, frequency=0, offset=bars)
                     if df is not None and not df.empty:
                         return code, self._normalize_columns(df)
                     return code, None
