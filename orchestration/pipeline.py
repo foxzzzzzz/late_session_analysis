@@ -1081,6 +1081,42 @@ class LateSessionPipeline:
             )
         self._fund_flow_fetched = True
 
+    def _enrich_fund_flow_from_cache(self, contexts: list[StockContext]):
+        """用已缓存的 _fund_flow_data 回填资金流数据到 contexts。
+
+        S3 用 _fetch_and_convert 重建 contexts 后会丢失 S2 已拉取的资金流数据。
+        此方法仅回填已有缓存，不发起 API 请求，避免 API 限流后数据归零。
+        """
+        if not self._fund_flow_data:
+            return
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        applied = 0
+        for ctx in contexts:
+            if ctx.code not in self._fund_flow_data:
+                continue
+            fd = self._fund_flow_data[ctx.code]
+            main_force = fd.get("mainForce", 0)
+            if main_force == 0:
+                continue
+            ctx.big_order_net = main_force * 10000
+            ctx.big_order_ratio = (
+                abs(ctx.big_order_net) / max(ctx.turnover, 1)
+                if ctx.turnover > 0 else 0
+            )
+            ctx.active_buy_ratio = fd.get("active_buy_ratio", 50.0)
+            ctx.data_quality_flags['fund_flow'] = True
+            ctx.data_quality_flags['fund_flow_source'] = 's2_cache'
+            ctx.data_quality_flags['fund_flow_data_date'] = fd.get("data_date", "")
+            ctx.data_quality_flags['fund_flow_is_realtime'] = (
+                fd.get("data_date", "") == today_str
+            )
+            applied += 1
+        if applied > 0:
+            logger.info(
+                f"资金流向(S2缓存回填): {applied}/{len(contexts)} 只, "
+                f"来源: {fd.get('sources_seen', [])}"
+            )
+
     # ============================================================
     # S3: 均线静态验证 (单次执行, 14:55)
     # ============================================================
@@ -1100,11 +1136,16 @@ class LateSessionPipeline:
                     if not df.empty:
                         self._5min_metrics[code] = KlineProvider.compute_late_metrics(df)
 
-        # 资金流向刷新 (S2缓存已过~20分钟, 累积数据有增量)
+        # 资金流向 — 仅在S2未取到时首次拉取; S2已有则复用, 避免API限流后数据丢失
+        prev_fund_flow = self._fund_flow_data.copy() if self._fund_flow_data else {}
         if self._flow_minute or self._flow_sina or self._flow_push2his:
-            self._fund_flow_fetched = False
-            self._enrich_fund_flow(contexts)
-            self.capital_data_date = "today" if self._fund_flow_data else "none"
+            if not self._fund_flow_fetched:
+                self._enrich_fund_flow(contexts)
+                self.capital_data_date = "today" if self._fund_flow_data else "none"
+            # 补丁: S3用新contexts重建后, 回填S2已有的资金流数据到当前contexts
+            if prev_fund_flow and not self._fund_flow_data:
+                self._fund_flow_data = prev_fund_flow
+            self._enrich_fund_flow_from_cache(contexts)
 
         self._enrich_contexts(contexts)
 
