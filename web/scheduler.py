@@ -1,4 +1,4 @@
-"""APScheduler integration for daily 14:29 pipeline + 15:30 P&L update."""
+"""APScheduler integration for daily 14:35 pipeline + 15:30 P&L update."""
 
 from __future__ import annotations
 
@@ -116,7 +116,7 @@ def init_scheduler(app: Flask) -> None:
     """Set up APScheduler for daily auto-execution on trading days.
 
     Jobs:
-    - 14:29 — Pipeline execution (S0 → S4)
+    - 14:35 — Pipeline execution (S0 → S4)
     - 15:30 — Update simulated positions P&L and recommendation tracking
     - 16:00 — Update recommendation tracking (fallback, after data settles)
 
@@ -136,7 +136,7 @@ def init_scheduler(app: Flask) -> None:
 
     scheduler = BackgroundScheduler(daemon=True)
 
-    # ── 14:29 Pipeline Job ─────────────────────────────────
+    # ── 14:35 Pipeline Job ─────────────────────────────────
 
     def daily_pipeline_job():
         _execute_scheduled_pipeline(app)
@@ -169,7 +169,7 @@ def init_scheduler(app: Flask) -> None:
         daily_pipeline_job,
         "cron",
         hour=14,
-        minute=29,
+        minute=35,
         timezone="Asia/Shanghai",
         misfire_grace_time=300,  # allow 5 min late
         id="daily_pipeline",
@@ -193,5 +193,5 @@ def init_scheduler(app: Flask) -> None:
     app.config["SCHEDULER_ACTIVE"] = True
     app.config["SCHEDULER"] = scheduler
     app.config["SCHEDULER_NEXT_RUN_TIME"] = scheduler.get_job("daily_pipeline").next_run_time
-    app.logger.info("APScheduler started (Asia/Shanghai): pipeline at 14:29, P&L update at 15:30")
+    app.logger.info("APScheduler started (Asia/Shanghai): pipeline at 14:35, P&L update at 15:30")
     app.logger.info(f"Scheduler running: {scheduler.running}, next: {scheduler.get_job('daily_pipeline').next_run_time}")
