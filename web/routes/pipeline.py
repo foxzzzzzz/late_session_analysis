@@ -181,13 +181,16 @@ def index():
 def run_pipeline():
     """Trigger a pipeline execution."""
     test_mode = request.json.get("test_mode", True) if request.json else True
+    force = request.json.get("force", False) if request.json else False
     today = date.today()
 
     # Check if already run today. Completed/running runs are protected, failed runs
     # can be retried by reusing the same unique trading_date row.
     existing = PipelineRun.query.filter_by(trading_date=today).first()
-    if existing and existing.status in ("running", "completed", "pending"):
-        return jsonify({"status": "error", "message": f"Pipeline already ran today ({today})"}), 409
+    if existing and existing.status in ("running", "pending"):
+        return jsonify({"status": "error", "message": f"Pipeline already running today ({today})"}), 409
+    if existing and existing.status == "completed" and not force:
+        return jsonify({"status": "error", "message": f"Pipeline already ran today ({today}). Use force=true to re-run."}), 409
     if existing:
         old_recs = DailyRecommendation.query.filter_by(run_id=existing.id).all()
         old_rec_ids = [rec.id for rec in old_recs]

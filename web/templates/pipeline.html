@@ -139,6 +139,25 @@
             });
             const data = await resp.json();
 
+            if (resp.status === 409 && data.message && data.message.includes('force=true')) {
+                if (confirm('今日已有执行记录，是否强制重新执行？')) {
+                    const retryResp = await fetch('/pipeline/run', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ test_mode: testMode, force: true })
+                    });
+                    const retryData = await retryResp.json();
+                    if (retryData.status === 'ok') {
+                        statusEl.textContent = `Run #${retryData.run_id} 运行中`;
+                        connectSSE(retryData.run_id);
+                        return;
+                    }
+                } else {
+                    resetBtn();
+                    return;
+                }
+            }
+
             if (data.status === 'ok') {
                 statusEl.textContent = `Run #${data.run_id} 运行中`;
                 connectSSE(data.run_id);
