@@ -167,13 +167,13 @@
 
 {% block extra_scripts %}
 <script>
-    // Countdown to next 14:29
+    // Countdown to next 14:35
     const schedulerActive = {{ 'true' if stats.scheduler_active else 'false' }};
     function updateCountdown() {
         if (!schedulerActive) return;
         const now = new Date();
         const next = new Date();
-        next.setHours(14, 29, 0, 0);
+        next.setHours(14, 35, 0, 0);
         if (next <= now) {
             next.setDate(next.getDate() + 1);
         }

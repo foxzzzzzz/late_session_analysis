@@ -39,7 +39,7 @@ def index():
 
     if scheduler_next is None:
         now = datetime.now()
-        next_run = now.replace(hour=14, minute=29, second=0, microsecond=0)
+        next_run = now.replace(hour=14, minute=35, second=0, microsecond=0)
         if next_run <= now:
             next_run += timedelta(days=1)
         while next_run.weekday() >= 5:
