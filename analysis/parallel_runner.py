@@ -183,6 +183,15 @@ class ParallelLLMRunner:
             return None
 
         fragment = response[start:]
+
+        # Clean up trailing fragments before repair
+        # Remove trailing ", "... → likely a key start that was truncated
+        import re
+        # Strip trailing " ,\"keyname" or ", \" or ","
+        fragment = re.sub(r',\s*"[^"]*$', '', fragment)
+        # Strip trailing " ,
+        fragment = re.sub(r',\s*$', '', fragment)
+
         open_braces = fragment.count('{') - fragment.count('}')
         open_brackets = fragment.count('[') - fragment.count(']')
         in_string = fragment.count('"') % 2 == 1
