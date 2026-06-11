@@ -58,14 +58,21 @@ class LLMClient:
 
                 response = litellm.completion(**kwargs)
                 msg = response.choices[0].message
-                content = msg.content
+                content = msg.content or ""
+                reasoning = getattr(msg, "reasoning_content", None) or ""
 
-                # v4-pro 可能把内容放在 reasoning_content 字段
-                if not content:
-                    content = getattr(msg, "reasoning_content", None)
-
-                if content and content.strip():
-                    return content.strip()
+                # v4-pro: JSON可能在content或reasoning_content, 取优先包含JSON的
+                # 如果content以{开头则直接用, 否则尝试reasoning, 最后拼接两者
+                candidate = content.strip()
+                if candidate and candidate.startswith("{"):
+                    return candidate
+                if reasoning.strip() and reasoning.strip().startswith("{"):
+                    return reasoning.strip()
+                # 两者都不是纯JSON开头: 返回content(可能含JSON在中间, 由parser提取)
+                if candidate:
+                    return candidate
+                if reasoning.strip():
+                    return reasoning.strip()
 
                 if attempt < max_retries:
                     delay = (2 ** attempt) + random.uniform(0, 1)

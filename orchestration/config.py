@@ -28,7 +28,7 @@ class SystemConfig:
     llm_model: str = ""
     llm_api_key: str = ""
     llm_api_base: str = ""
-    llm_max_tokens: int = 1024
+    llm_max_tokens: int = 2048
     llm_temperature: float = 0.3
 
     # === 筛选阈值 ===
