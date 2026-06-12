@@ -213,15 +213,18 @@ def save_pipeline_results(run_id: int, results: dict) -> None:
 
     db.session.commit()
 
-    # Auto-create simulated trades for strong_buy
+    # Auto-create simulated trades for strong_buy + buy
     _auto_create_simulated_trades(run_id)
 
 
 def _auto_create_simulated_trades(run_id: int) -> int:
-    """Create simulated trades for strong_buy recommendations."""
+    """Create simulated trades for strong_buy and buy recommendations."""
     from web.models import db, DailyRecommendation, SimulatedTrade
 
-    recs = DailyRecommendation.query.filter_by(run_id=run_id, level="strong_buy").all()
+    recs = DailyRecommendation.query.filter(
+        DailyRecommendation.run_id == run_id,
+        DailyRecommendation.level.in_(["strong_buy", "buy"]),
+    ).all()
     count = 0
     for rec in recs:
         existing = SimulatedTrade.query.filter_by(recommendation_id=rec.id).first()
