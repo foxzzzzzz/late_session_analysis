@@ -128,9 +128,9 @@ class TencentFetcher(BaseFetcher):
                     bid_vol=(_sf(vals[10]) + _sf(vals[12]) + _sf(vals[14]) + _sf(vals[16]) + _sf(vals[18])) * 100,  # 买1-5量(手→股)
                     ask_vol=(_sf(vals[20]) + _sf(vals[22]) + _sf(vals[24]) + _sf(vals[26]) + _sf(vals[28])) * 100,  # 卖1-5量(手→股)
                     change_pct=_sf(vals[32]),
-                    turnover=_sf(vals[37]) * 10000,  # 万→元
+                    turnover=_parse_tencent_amount(vals),  # 精确成交额(元), 字段35优先→37兜底
                     turnover_rate=_sf(vals[38]),
-                    volume=_sf(vals[6]),
+                    volume=_normalize_tencent_volume(vals) or 0,  # 交叉校验归一化为股
                     high=_sf(vals[33]),
                     low=_sf(vals[34]),
                     open=_sf(vals[5]) or price,
@@ -218,3 +218,62 @@ def _sf(val) -> float:
         return float(val)
     except (ValueError, TypeError):
         return 0.0
+
+
+def _si(val) -> int | None:
+    """Safe int — returns None on empty/invalid, for volume normalization."""
+    try:
+        if val is None or val == '' or val == '-':
+            return None
+        return int(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _normalize_tencent_volume(vals: list[str]) -> int | None:
+    """
+    将腾讯实时行情成交量归一化为股。
+
+    腾讯字段6的返回内容说明和实际返回不完全一致。
+    优先用换手率/价格/流通市值交叉校验，在原值和手转股值中选择更准确的一方。
+    若无法交叉校验，则兜底为旧的手转股逻辑(*100)。
+    """
+    if len(vals) <= 6 or not vals[6]:
+        return None
+
+    raw_volume = _si(vals[6])
+    if raw_volume is None:
+        return None
+
+    price = _sf(vals[3]) if len(vals) > 3 else 0
+    turnover_rate = _sf(vals[38]) if len(vals) > 38 else 0
+    circ_mv_yi = _sf(vals[44]) if len(vals) > 44 and vals[44] else None
+    circ_mv = circ_mv_yi * 100_000_000 if circ_mv_yi is not None else None
+
+    if price > 0 and turnover_rate > 0 and circ_mv and circ_mv > 0:
+        expected_volume = (circ_mv / price) * (turnover_rate / 100)
+        if expected_volume > 0:
+            raw_delta = abs(raw_volume - expected_volume)
+            hand_to_share = raw_volume * 100
+            hand_delta = abs(hand_to_share - expected_volume)
+            return raw_volume if raw_delta <= hand_delta else hand_to_share
+
+    return raw_volume * 100
+
+
+def _parse_tencent_amount(vals: list[str]) -> float:
+    """
+    解析腾讯实时行情成交额，返回单位为元。
+
+    字段35包含更精确的"价格/成交量/成交额"三元组。
+    字段37是旧的"万元"口径兜底字段。
+    """
+    if len(vals) > 35 and vals[35]:
+        parts = vals[35].split("/")
+        if len(parts) >= 3:
+            precise = _sf(parts[2])
+            if precise > 0:
+                return precise
+
+    amount_wan = _sf(vals[37]) if len(vals) > 37 and vals[37] else 0
+    return amount_wan * 10000 if amount_wan > 0 else 0
