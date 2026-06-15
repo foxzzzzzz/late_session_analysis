@@ -129,6 +129,7 @@ class LateSessionPipeline:
                 api_base=config.llm_api_base,
                 max_tokens=config.llm_max_tokens,
                 temperature=config.llm_temperature,
+                timeout=config.llm_timeout,
             )
             self.llm_runner = ParallelLLMRunner(self.llm_client, max_workers=4)
 

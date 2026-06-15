@@ -28,8 +28,9 @@ class SystemConfig:
     llm_model: str = ""
     llm_api_key: str = ""
     llm_api_base: str = ""
-    llm_max_tokens: int = 8192
+    llm_max_tokens: int = 4096
     llm_temperature: float = 0.3
+    llm_timeout: int = 30
 
     # === 筛选阈值 ===
     l1_min_turnover: float = 50_000_000
@@ -192,6 +193,7 @@ class SystemConfig:
 
         self.llm_max_tokens = int(os.getenv("LLM_MAX_TOKENS", str(self.llm_max_tokens)))
         self.llm_temperature = float(os.getenv("LLM_TEMPERATURE", str(self.llm_temperature)))
+        self.llm_timeout = int(os.getenv("LLM_TIMEOUT", str(self.llm_timeout)))
 
         self.l1_min_turnover = float(os.getenv("L1_MIN_TURNOVER", str(self.l1_min_turnover)))
         self.l1_min_turnover_rate = float(os.getenv("L1_MIN_TURNOVER_RATE", str(self.l1_min_turnover_rate)))
