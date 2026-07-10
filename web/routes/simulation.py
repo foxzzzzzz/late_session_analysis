@@ -87,18 +87,22 @@ def close_trade(trade_id: int):
     trade.exit_reason = "manual"
 
     # Try to get current price for exit
-    try:
-        from data_provider.kline_provider import KlineProvider
-        kline = KlineProvider()
-        daily = kline.load_daily_batch([trade.recommendation.code], bars=5)
-        bars = daily.get(trade.recommendation.code)
-        if bars is not None and not bars.empty:
-            latest = bars.iloc[-1]
-            trade.exit_price = float(latest["close"])
-            trade.return_pct = round(
-                (trade.exit_price - trade.entry_price) / trade.entry_price * 100, 2
-            )
-    except Exception:
+    code = trade.recommendation.code if trade.recommendation_id else trade.code
+    if code:
+        try:
+            from data_provider.kline_provider import KlineProvider
+            kline = KlineProvider()
+            daily = kline.load_daily_batch([code], bars=5)
+            bars = daily.get(code)
+            if bars is not None and not bars.empty:
+                latest = bars.iloc[-1]
+                trade.exit_price = float(latest["close"])
+                trade.return_pct = round(
+                    (trade.exit_price - trade.entry_price) / trade.entry_price * 100, 2
+                )
+        except Exception:
+            trade.exit_price = trade.entry_price
+    else:
         trade.exit_price = trade.entry_price
 
     db.session.commit()

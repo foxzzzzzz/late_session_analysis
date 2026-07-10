@@ -42,8 +42,12 @@ class SimulationService:
 
         today = date.today()
 
-        # Collect unique codes
-        codes = list({t.recommendation.code for t in open_trades})
+        # Collect unique codes (handle manual trades without recommendation)
+        codes = list({
+            t.recommendation.code if t.recommendation_id else t.code
+            for t in open_trades
+            if t.recommendation_id or t.code
+        })
 
         # Fetch daily bars for all codes
         prices = SimulationService._fetch_latest_prices(codes)
@@ -53,8 +57,8 @@ class SimulationService:
         took_profit = 0
 
         for trade in open_trades:
-            code = trade.recommendation.code
-            if code not in prices or prices[code] <= 0:
+            code = trade.recommendation.code if trade.recommendation_id else trade.code
+            if not code or code not in prices or prices.get(code, 0) <= 0:
                 continue
 
             current_price = prices[code]
@@ -108,6 +112,7 @@ class SimulationService:
         trade_rec_ids = {
             row[0] for row in
             db.session.query(SimulatedTrade.recommendation_id).distinct().all()
+            if row[0] is not None  # skip manual trades (recommendation_id=None)
         }
 
         if not trade_rec_ids:
