@@ -13,6 +13,18 @@ TAKE_PROFIT_PCT = 5.0
 MAX_HOLD_DAYS = 10  # Auto-close after 10 trading days
 
 
+def _get_stop_loss(trade) -> float:
+    """Return per-trade stop_loss_pct or global default."""
+    val = getattr(trade, "stop_loss_pct", None)
+    return float(val) if val is not None else STOP_LOSS_PCT
+
+
+def _get_take_profit(trade) -> float:
+    """Return per-trade take_profit_pct or global default."""
+    val = getattr(trade, "take_profit_pct", None)
+    return float(val) if val is not None else TAKE_PROFIT_PCT
+
+
 class SimulationService:
     """Manages simulated trades: price updates, exit checks, P&L calculation."""
 
@@ -50,24 +62,26 @@ class SimulationService:
             trade.return_pct = return_pct  # type: ignore[attr-defined]
             updated += 1
 
-            # Check exit conditions
+            # Check exit conditions (per-trade thresholds)
             days_held = (today - trade.entry_date).days
+            stop = _get_stop_loss(trade)
+            profit = _get_take_profit(trade)
 
-            if return_pct <= STOP_LOSS_PCT:
+            if return_pct <= stop:
                 trade.status = "closed"  # type: ignore[attr-defined]
                 trade.exit_date = today  # type: ignore[attr-defined]
                 trade.exit_price = current_price  # type: ignore[attr-defined]
                 trade.exit_reason = "stop_loss"  # type: ignore[attr-defined]
                 stopped += 1
-                logger.info(f"Stop-loss: {code} at {return_pct}%")
+                logger.info(f"Stop-loss: {code} at {return_pct}% (threshold={stop}%)")
 
-            elif return_pct >= TAKE_PROFIT_PCT:
+            elif return_pct >= profit:
                 trade.status = "closed"  # type: ignore[attr-defined]
                 trade.exit_date = today  # type: ignore[attr-defined]
                 trade.exit_price = current_price  # type: ignore[attr-defined]
                 trade.exit_reason = "take_profit"  # type: ignore[attr-defined]
                 took_profit += 1
-                logger.info(f"Take-profit: {code} at {return_pct}%")
+                logger.info(f"Take-profit: {code} at {return_pct}% (threshold={profit}%)")
 
             elif days_held >= MAX_HOLD_DAYS:
                 trade.status = "closed"  # type: ignore[attr-defined]
@@ -177,3 +191,68 @@ class SimulationService:
                 pass
 
         return result
+
+    @staticmethod
+    def create_manual_trade(
+        code: str, name: str, entry_price: float,
+        notional: float = 10000.0,
+        stop_loss_pct: float | None = None,
+        take_profit_pct: float | None = None,
+    ) -> dict:
+        """Create a manually-added simulated trade (no recommendation_id)."""
+        from datetime import date as _date
+        from web.models import db, SimulatedTrade
+
+        trade = SimulatedTrade(
+            recommendation_id=None,
+            code=str(code).zfill(6),
+            name=name or code,
+            entry_date=_date.today(),
+            entry_price=float(entry_price),
+            status="open",
+            notional=float(notional),
+            shares=int(float(notional) / float(entry_price)) if float(entry_price) > 0 else 0,
+            stop_loss_pct=float(stop_loss_pct) if stop_loss_pct is not None else None,
+            take_profit_pct=float(take_profit_pct) if take_profit_pct is not None else None,
+            source="manual",
+        )
+        db.session.add(trade)
+        db.session.commit()
+        return {"status": "ok", "trade_id": trade.id}
+
+    @staticmethod
+    def update_single_price(trade) -> dict:
+        """Refresh current price for a single trade and check exit conditions."""
+        from datetime import date as _date
+        from web.models import db
+
+        code = (trade.recommendation.code if trade.recommendation_id
+                else trade.code)
+        if not code:
+            return {"status": "error", "message": "No code"}
+
+        prices = SimulationService._fetch_latest_prices([code])
+        if code not in prices or prices[code] <= 0:
+            return {"status": "error", "message": "Price not available"}
+
+        current_price = prices[code]
+        return_pct = round((current_price - trade.entry_price) / trade.entry_price * 100, 2)
+        trade.return_pct = return_pct
+
+        today = _date.today()
+        stop = _get_stop_loss(trade)
+        profit = _get_take_profit(trade)
+
+        if return_pct <= stop:
+            trade.status = "closed"
+            trade.exit_date = today
+            trade.exit_price = current_price
+            trade.exit_reason = "stop_loss"
+        elif return_pct >= profit:
+            trade.status = "closed"
+            trade.exit_date = today
+            trade.exit_price = current_price
+            trade.exit_reason = "take_profit"
+
+        db.session.commit()
+        return {"status": "ok", "price": current_price, "return_pct": return_pct}

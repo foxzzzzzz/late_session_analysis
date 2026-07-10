@@ -105,6 +105,53 @@ def close_trade(trade_id: int):
     return jsonify({"status": "ok", "return_pct": trade.return_pct})
 
 
+@bp.route("/create", methods=["POST"])
+def create_trade():
+    """Manually add a simulated trade."""
+    from web.services.simulation_service import SimulationService
+
+    data = request.get_json() or {}
+    code = data.get("code", "").strip()
+    if not code:
+        return jsonify({"status": "error", "message": "代码不能为空"}), 400
+
+    name = data.get("name", "").strip() or code
+    try:
+        entry_price = float(data.get("entry_price", 0))
+        if entry_price <= 0:
+            return jsonify({"status": "error", "message": "入场价必须>0"}), 400
+    except (ValueError, TypeError):
+        return jsonify({"status": "error", "message": "入场价格式错误"}), 400
+
+    notional = float(data.get("notional", 10000))
+    stop_loss = data.get("stop_loss_pct")
+    take_profit = data.get("take_profit_pct")
+
+    try:
+        result = SimulationService.create_manual_trade(
+            code=code, name=name, entry_price=entry_price,
+            notional=notional,
+            stop_loss_pct=float(stop_loss) if stop_loss else None,
+            take_profit_pct=float(take_profit) if take_profit else None,
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@bp.route("/update-price/<int:trade_id>", methods=["POST"])
+def update_price(trade_id: int):
+    """Refresh price for a single trade."""
+    from web.services.simulation_service import SimulationService
+
+    trade = db.session.get(SimulatedTrade, trade_id)
+    if not trade:
+        return jsonify({"status": "error", "message": "Not found"}), 404
+
+    result = SimulationService.update_single_price(trade)
+    return jsonify(result)
+
+
 @bp.route("/update", methods=["POST"])
 def daily_update():
     """Trigger daily price update + exit checks for all open positions."""

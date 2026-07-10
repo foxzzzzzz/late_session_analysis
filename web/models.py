@@ -89,14 +89,18 @@ class RecommendationTracking(db.Model):  # type: ignore
 
 
 class SimulatedTrade(db.Model):  # type: ignore
-    """Simulated trades created from daily recommendations."""
+    """Simulated trades created from daily recommendations or added manually."""
 
     __tablename__ = "simulated_trades"
 
     id = db.Column(Integer, primary_key=True, autoincrement=True)
     recommendation_id = db.Column(
-        Integer, ForeignKey("daily_recommendations.id"), nullable=False
+        Integer, ForeignKey("daily_recommendations.id"), nullable=True  # nullable for manual trades
     )
+    # Manual-trade fields (used when recommendation_id is None)
+    code = db.Column(String(12), nullable=True)
+    name = db.Column(String(32), nullable=True)
+    # Entry/exit
     entry_date = db.Column(Date, nullable=False)
     entry_price = db.Column(Float, nullable=False, default=0.0)
     exit_date = db.Column(Date, nullable=True)
@@ -106,6 +110,10 @@ class SimulatedTrade(db.Model):  # type: ignore
     status = db.Column(String(16), nullable=False, default="open")  # open | closed
     notional = db.Column(Float, nullable=False, default=10000.0)
     shares = db.Column(Integer, nullable=False, default=0)
+    # Custom risk control
+    stop_loss_pct = db.Column(Float, nullable=True)   # override default stop_loss
+    take_profit_pct = db.Column(Float, nullable=True)  # override default take_profit
+    source = db.Column(String(16), nullable=False, default="auto")  # auto | manual
 
     recommendation = db.relationship("DailyRecommendation", backref="simulated_trade")
 

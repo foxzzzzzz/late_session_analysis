@@ -189,9 +189,46 @@ def init_scheduler(app: Flask) -> None:
         replace_existing=True,
     )
 
+    # ── Intraday Price Refresh (every 30 min during market hours) ──
+
+    def intraday_price_refresh():
+        with app.app_context():
+            from web.services.simulation_service import SimulationService
+            from datetime import date as _date
+
+            today = _date.today()
+            if today.weekday() >= 5:
+                return
+            now_hour = datetime.now().hour
+            if now_hour < 9 or now_hour > 15:
+                return
+
+            app.logger.info(f"Intraday price refresh at {datetime.now().strftime('%H:%M')}")
+            try:
+                pos = SimulationService.update_all_open_positions()
+                track = SimulationService.update_recommendation_tracking()
+                app.logger.info(
+                    f"Intraday: {pos['updated']} updated, "
+                    f"{pos['stopped_out']} stopped, {pos['take_profit']} took profit"
+                )
+            except Exception as e:
+                app.logger.error(f"Intraday refresh failed: {e}")
+
+    scheduler.add_job(
+        intraday_price_refresh,
+        "cron",
+        hour="9-15",
+        minute="0,30",
+        timezone="Asia/Shanghai",
+        misfire_grace_time=120,
+        id="intraday_price_refresh",
+        name="Intraday Price Refresh (every 30 min)",
+        replace_existing=True,
+    )
+
     scheduler.start()
     app.config["SCHEDULER_ACTIVE"] = True
     app.config["SCHEDULER"] = scheduler
     app.config["SCHEDULER_NEXT_RUN_TIME"] = scheduler.get_job("daily_pipeline").next_run_time
-    app.logger.info("APScheduler started (Asia/Shanghai): pipeline at 14:35, P&L update at 15:30")
+    app.logger.info("APScheduler started (Asia/Shanghai): pipeline at 14:35, P&L at 15:30, intraday refresh :00/:30")
     app.logger.info(f"Scheduler running: {scheduler.running}, next: {scheduler.get_job('daily_pipeline').next_run_time}")

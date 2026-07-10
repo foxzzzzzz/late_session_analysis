@@ -4,8 +4,63 @@
 {% block content %}
 <div class="page-header">
     <h1><i class="bi bi-wallet2 me-2"></i>模拟交易</h1>
-    <div class="text-muted" style="font-size:0.8rem;">
-        规则: strong_buy → ¥{{ '{:,.0f}'.format(stats.default_notional) }} | 止损 {{ stats.stop_loss_pct }}% | 止盈 +{{ stats.take_profit_pct }}%
+    <div class="d-flex gap-2 align-items-center">
+        <div class="text-muted" style="font-size:0.8rem;">
+            规则: buy/strong_buy 自动 | 止损 ±5% | 止盈 +5%
+        </div>
+        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addTradeModal">
+            <i class="bi bi-plus-lg me-1"></i>手动添加
+        </button>
+        <button class="btn btn-outline-light btn-sm" onclick="manualRefresh()">
+            <i class="bi bi-arrow-clockwise me-1"></i>刷新价格
+        </button>
+    </div>
+</div>
+
+<!-- Add Trade Modal -->
+<div class="modal fade" id="addTradeModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark">
+            <div class="modal-header border-secondary">
+                <h5 class="modal-title">手动添加交易</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="add-trade-form" onsubmit="addManualTrade(event)">
+                    <div class="mb-3">
+                        <label class="form-label">股票代码 *</label>
+                        <input type="text" class="form-control" id="add-code" placeholder="000001" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">股票名称</label>
+                        <input type="text" class="form-control" id="add-name" placeholder="平安银行">
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <label class="form-label">入场价 *</label>
+                            <input type="number" step="0.01" class="form-control" id="add-price" placeholder="12.50" required>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">金额 (¥)</label>
+                            <input type="number" step="100" class="form-control" id="add-notional" value="10000">
+                        </div>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <label class="form-label">止盈 %</label>
+                            <input type="number" step="0.1" class="form-control" id="add-take-profit" value="5.0">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">止损 %</label>
+                            <input type="number" step="0.1" class="form-control" id="add-stop-loss" value="-5.0">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100" id="add-submit-btn">
+                        <i class="bi bi-check-lg me-1"></i>添加
+                    </button>
+                </form>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -74,6 +129,7 @@
                         <th>入场价</th>
                         <th>当前价</th>
                         <th>盈亏%</th>
+                        <th>止盈/止损</th>
                         <th>金额</th>
                         <th>操作</th>
                     </tr>
@@ -81,13 +137,29 @@
                 <tbody>
                     {% for trade in open_trades %}
                     <tr>
-                        <td><code>{{ trade.recommendation.code }}</code></td>
-                        <td>{{ trade.recommendation.name }}</td>
+                        <td>
+                            {% if trade.recommendation_id %}
+                            <code>{{ trade.recommendation.code }}</code>
+                            {% else %}
+                            <code>{{ trade.code }}</code>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {{ trade.recommendation.name if trade.recommendation_id else trade.name }}
+                            {% if trade.source == 'manual' %}
+                            <span class="badge bg-info ms-1">手动</span>
+                            {% endif %}
+                        </td>
                         <td>{{ trade.entry_date }}</td>
                         <td>{{ trade.entry_price | fmt }}</td>
-                        <td>{{ trade.recommendation.entry_price * (1 + (trade.return_pct or 0) / 100) | fmt if trade.return_pct else '–' }}</td>
+                        <td>{{ (trade.entry_price * (1 + (trade.return_pct or 0) / 100)) | fmt if trade.return_pct else '–' }}</td>
                         <td class="{{ 'pnl-up' if (trade.return_pct or 0) > 0 else 'pnl-down' if (trade.return_pct or 0) < 0 else 'pnl-flat' }}">
                             {{ '+' if (trade.return_pct or 0) > 0 else '' }}{{ (trade.return_pct or 0) | fmt }}%
+                        </td>
+                        <td style="font-size:0.75rem;">
+                            {% set sl = trade.stop_loss_pct if trade.stop_loss_pct is not none else -5.0 %}
+                            {% set tp = trade.take_profit_pct if trade.take_profit_pct is not none else 5.0 %}
+                            <span class="text-success">+{{ tp }}%</span> / <span class="text-danger">{{ sl }}%</span>
                         </td>
                         <td style="font-size:0.85rem;">¥{{ '{:,.0f}'.format(trade.notional) }}</td>
                         <td>
@@ -132,8 +204,19 @@
                 <tbody>
                     {% for trade in closed_trades %}
                     <tr>
-                        <td><code>{{ trade.recommendation.code }}</code></td>
-                        <td>{{ trade.recommendation.name }}</td>
+                        <td>
+                            {% if trade.recommendation_id %}
+                            <code>{{ trade.recommendation.code }}</code>
+                            {% else %}
+                            <code>{{ trade.code }}</code>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {{ trade.recommendation.name if trade.recommendation_id else trade.name }}
+                            {% if trade.source == 'manual' %}
+                            <span class="badge bg-info ms-1">手动</span>
+                            {% endif %}
+                        </td>
                         <td>{{ trade.entry_date }}</td>
                         <td>{{ trade.exit_date or '–' }}</td>
                         <td>{{ trade.entry_price | fmt }}</td>
@@ -169,6 +252,42 @@
 
 {% block extra_scripts %}
 <script>
+    async function addManualTrade(e) {
+        e.preventDefault();
+        const btn = document.getElementById('add-submit-btn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>添加中...';
+
+        const data = {
+            code: document.getElementById('add-code').value.trim(),
+            name: document.getElementById('add-name').value.trim(),
+            entry_price: document.getElementById('add-price').value,
+            notional: document.getElementById('add-notional').value || '10000',
+            stop_loss_pct: document.getElementById('add-stop-loss').value || '-5.0',
+            take_profit_pct: document.getElementById('add-take-profit').value || '5.0',
+        };
+
+        try {
+            const resp = await fetch('/simulation/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            const result = await resp.json();
+            if (result.status === 'ok') {
+                location.reload();
+            } else {
+                alert(result.message || '添加失败');
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>添加';
+            }
+        } catch (e) {
+            alert('网络错误: ' + e.message);
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>添加';
+        }
+    }
+
     async function closeTrade(tradeId) {
         if (!confirm('确认手动平仓？')) return;
         try {
@@ -183,5 +302,50 @@
             alert('网络错误: ' + e.message);
         }
     }
+
+    async function manualRefresh() {
+        const btn = event.target.closest('button');
+        const orig = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+        try {
+            const resp = await fetch('/simulation/update', { method: 'POST' });
+            const data = await resp.json();
+            if (data.status === 'ok') {
+                location.reload();
+            } else {
+                alert(data.message || '刷新失败');
+            }
+        } catch (e) {
+            alert('网络错误: ' + e.message);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = orig;
+        }
+    }
+
+    // Auto-refresh prices every 30 min during market hours
+    function isMarketHours() {
+        const now = new Date();
+        const day = now.getDay();
+        if (day === 0 || day === 6) return false;
+        const h = now.getHours(), m = now.getMinutes();
+        const t = h * 60 + m;
+        return t >= 9 * 60 + 30 && t <= 15 * 60;
+    }
+
+    let autoRefreshTimer = null;
+    function scheduleAutoRefresh() {
+        if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+        if (!isMarketHours()) return;
+        autoRefreshTimer = setInterval(() => {
+            if (!isMarketHours()) { clearInterval(autoRefreshTimer); return; }
+            fetch('/simulation/update', { method: 'POST' }).then(r => r.json()).then(d => {
+                if (d.status === 'ok') location.reload();
+            }).catch(() => {});
+        }, 30 * 60 * 1000);
+    }
+    scheduleAutoRefresh();
 </script>
 {% endblock %}
