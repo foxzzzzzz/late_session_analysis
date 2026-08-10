@@ -51,12 +51,26 @@ log_info "当前用户: $(whoami)"
 # ── 2. 创建虚拟环境 ──────────────────────────────────────
 log_step "2/6 创建虚拟环境"
 
-if [ -f "$VENV_DIR/bin/python" ]; then
+# 清除旧的损坏 venv (避免 pip 不存在等残留问题)
+if [ -d "$VENV_DIR" ] && [ ! -f "$VENV_DIR/bin/pip" ]; then
+    log_warn "检测到损坏的虚拟环境 (无 pip)，清除后重建..."
+    rm -rf "$VENV_DIR"
+fi
+
+if [ -f "$VENV_DIR/bin/python" ] && [ -f "$VENV_DIR/bin/pip" ]; then
     log_info "虚拟环境已存在: $VENV_DIR"
 else
+    # 确保 python3-venv 已安装 (Ubuntu 新系统常见缺失)
+    if ! python3 -m venv --help &>/dev/null; then
+        log_warn "python3-venv 未安装，尝试安装..."
+        sudo apt update -qq && sudo apt install -y python3-venv || {
+            log_error "python3-venv 安装失败，请手动执行: sudo apt install python3-venv"
+            exit 1
+        }
+    fi
     log_info "创建 Python 虚拟环境..."
     python3 -m venv "$VENV_DIR" 2>&1 || {
-        log_error "创建虚拟环境失败，尝试安装 python3-venv: sudo apt install python3-venv"
+        log_error "创建虚拟环境失败"
         exit 1
     }
     log_info "虚拟环境创建完成"
