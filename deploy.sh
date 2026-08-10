@@ -105,12 +105,10 @@ fi
 # ── 4. 检测 TDX 服务器 ───────────────────────────────────
 log_step "4/6 检测 TDX 服务器 (mootdx)"
 
-MOOTDX_CFG="$HOME/.mootdx/config.json"
-if [ -f "$MOOTDX_CFG" ]; then
-    log_info "mootdx 配置已存在，跳过检测"
-else
-    log_info "扫描可用的 TDX 服务器..."
-    TDX_OK=$($PYTHON -c "
+# 每次都重扫，避免旧配置指向不可达服务器
+log_info "扫描可用的 TDX 服务器..."
+rm -f "$MOOTDX_CFG"
+TDX_OK=$($PYTHON -c "
 import socket, json, os
 from tdxpy.constants import hq_hosts
 for name, addr, port in hq_hosts[:50]:
@@ -124,11 +122,10 @@ for name, addr, port in hq_hosts[:50]:
         break
     except: pass
 " 2>&1)
-    if [ -n "$TDX_OK" ]; then
-        log_info "TDX 服务器可用: $TDX_OK"
-    else
-        log_warn "所有 TDX 服务器不可达，K线将自动降级到 Sina HTTP"
-    fi
+if [ -n "$TDX_OK" ]; then
+    log_info "TDX 服务器可用: $TDX_OK"
+else
+    log_warn "所有 TDX 服务器不可达，K线将自动降级到 Sina HTTP"
 fi
 
 # ── 5. 配置文件 ──────────────────────────────────────────
