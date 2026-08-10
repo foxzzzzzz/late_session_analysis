@@ -673,9 +673,9 @@ export WEB_SCHEDULER_ENABLED=false
 
 - Linux 服务器 (推荐 2核4G 以上)
 - Python 3.11+
-- Docker & Docker Compose (可选，推荐)
+- Docker & Docker Compose (可选)
 
-### 方式一：Docker 部署 (推荐)
+### 方式一：Docker 部署
 
 ```bash
 # 1. 克隆仓库
@@ -707,53 +707,37 @@ docker-compose logs -f
 | `./web_instance` | Web Dashboard SQLite 数据库 |
 | `./.env` | 只读挂载，保护 API Key |
 
-### 方式二：直接部署
+### 方式二：一键脚本部署 (推荐)
 
 ```bash
-# 1. 安装系统依赖
-sudo apt update && sudo apt install -y python3 python3-pip
-
-# 2. 克隆并安装
+# 1. 克隆代码
 git clone https://github.com/foxzzzzzz/late_session_analysis.git
 cd late_session_analysis
-pip install -r requirements.txt -r web/requirements-web.txt
 
-# 3. 配置
-cp .env.example .env
-nano .env
+# 2. 一键部署 (虚拟环境 + 依赖 + systemd 开机自启)
+chmod +x deploy.sh && ./deploy.sh
 
-# 4. 使用 systemd 管理服务
-sudo nano /etc/systemd/system/late-session.service
+# 3. 配置 API Key
+nano .env  # 填入 LLM_API_KEY=sk-xxx
+
+# 4. 重启服务使配置生效
+sudo systemctl restart late-session
+
+# 5. 访问
+# http://<服务器IP>:5000
 ```
 
-**systemd 配置 (`/etc/systemd/system/late-session.service`):**
-
-```ini
-[Unit]
-Description=Late Session Analysis Web Dashboard
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/late_session_analysis
-ExecStart=/usr/bin/python3 -m web.app --port 5000
-Restart=always
-RestartSec=10
-Environment=TZ=Asia/Shanghai
-
-[Install]
-WantedBy=multi-user.target
-```
+脚本自动完成: 创建虚拟环境 → 安装依赖 → 检测 TDX 服务器 → 创建数据目录 → 配置 systemd 开机自启。
 
 ```bash
-# 启动服务
-sudo systemctl daemon-reload
-sudo systemctl enable late-session
-sudo systemctl start late-session
+# 服务管理
+sudo systemctl status late-session     # 查看状态
+sudo journalctl -u late-session -f     # 实时日志
+sudo systemctl restart late-session    # 重启
+sudo systemctl stop late-session       # 停止
 
-# 查看状态
-sudo systemctl status late-session
+# 端口自定义
+WEB_PORT=8080 ./deploy.sh              # 部署到 8080 端口
 ```
 
 ### 方式三：使用外部 cron + CLI (无 Web GUI)
