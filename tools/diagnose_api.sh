@@ -3,7 +3,9 @@
 # 用法: bash diagnose_api.sh
 set -e
 
-PYTHON=/home/admin/late_session_analysis/.venv/bin/python3
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PYTHON="$APP_DIR/.venv/bin/python3"
+[ -f "$PYTHON" ] || PYTHON=python3  # fallback to system python if no venv
 
 echo "========================================"
 echo "  API 连通性诊断"
