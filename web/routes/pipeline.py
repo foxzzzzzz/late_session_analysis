@@ -230,7 +230,7 @@ def stream(run_id: int):
     """SSE endpoint for real-time log streaming — executes pipeline inline."""
     q = _log_queues.get(run_id)
     if q is None:
-        return _stream_from_db(run_id)
+        return _stream_from_db(run_id, app=current_app._get_current_object())
 
     # Check if this is a fresh run that needs execution
     run = db.session.get(PipelineRun, run_id)
@@ -355,24 +355,35 @@ def _stream_from_queue(run_id: int, q: queue.Queue):
                 break
 
 
-def _stream_from_db(run_id: int):
+def _stream_from_db(run_id: int, app=None):
     """Stream all logs from DB for finished runs."""
     return Response(
-        _db_log_generator(run_id),
+        _db_log_generator(run_id, app=app),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
 
 
-def _db_log_generator(run_id: int):
+def _db_log_generator(run_id: int, app=None):
     """Replay logs from DB as SSE."""
-    logs = (
-        PipelineLog.query
-        .filter_by(run_id=run_id)
-        .order_by(PipelineLog.id)
-        .all()
-    )
-    run = db.session.get(PipelineRun, run_id)
+    # Eager-load DB data while context is still active
+    logs = []
+    run_status = "unknown"
+    try:
+        if app:
+            with app.app_context():
+                logs = (
+                    PipelineLog.query
+                    .filter_by(run_id=run_id)
+                    .order_by(PipelineLog.id)
+                    .all()
+                )
+                run = db.session.get(PipelineRun, run_id)
+                if run:
+                    run_status = run.status
+    except Exception:
+        pass
+
     yield "event: connected\ndata: {}\n\n"
     for log in logs:
         payload = json.dumps(
@@ -380,8 +391,7 @@ def _db_log_generator(run_id: int):
             ensure_ascii=False,
         )
         yield f"data: {payload}\n\n"
-    if run:
-        yield f"event: done\ndata: {{\"status\": \"{run.status}\"}}\n\n"
+    yield f"event: done\ndata: {{\"status\": \"{run_status}\"}}\n\n"
 
 
 @bp.route("/<int:run_id>")
