@@ -174,6 +174,7 @@ ExecStart=$VENV_DIR/bin/python -m web.app --host 0.0.0.0 --port $PORT
 Restart=always
 RestartSec=10
 Environment=TZ=Asia/Shanghai
+Environment=HOME=$HOME
 Environment=WEB_INSTANCE_DIR=$APP_DIR/web_instance
 
 [Install]
