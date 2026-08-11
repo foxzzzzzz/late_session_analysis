@@ -109,18 +109,38 @@ log_step "4/6 检测 TDX 服务器 (mootdx)"
 log_info "扫描可用的 TDX 服务器..."
 rm -f "$MOOTDX_CFG"
 TDX_OK=$($PYTHON -c "
-import socket, json, os
-from tdxpy.constants import hq_hosts
-for name, addr, port in hq_hosts[:50]:
-    try:
-        s = socket.socket(); s.settimeout(2)
-        s.connect((addr, port)); s.close()
-        cfg = {'SERVER': {'HQ': [['auto', addr, port]]}, 'BESTIP': {'HQ': [addr, port], 'EX': '', 'GP': ''}}
-        os.makedirs(os.path.expanduser('~/.mootdx'), exist_ok=True)
-        json.dump(cfg, open(os.path.expanduser('~/.mootdx/config.json'), 'w'))
-        print(f'{addr}:{port}')
-        break
-    except: pass
+import json, os
+from mootdx.quotes import Quotes
+
+# 优先用 mootdx 内置 bestip 选择 (真正测试可用性，非裸TCP)
+cfg_dir = os.path.expanduser('~/.mootdx')
+os.makedirs(cfg_dir, exist_ok=True)
+
+# 尝试标准 factory (会用 bestip 选最快服务器并验证数据)
+try:
+    q = Quotes.factory(market='std', bestip=True)
+    ip, port = q.server
+    # 验证真的能拉数据
+    d = q.bars(symbol='000001', category=4, offset=5)
+    if d is not None and len(d) > 0:
+        cfg = {'SERVER': {'HQ': [['bestip', ip, port]]}, 'BESTIP': {'HQ': [ip, port], 'EX': '', 'GP': ''}}
+        json.dump(cfg, open(os.path.join(cfg_dir, 'config.json'), 'w'))
+        print(f'{ip}:{port}')
+    else:
+        raise Exception('server OK but returned 0 rows')
+except Exception:
+    # bestip 可能选中了可达但不返数据的服务器，用已知可用IP兜底
+    for fallback_ip in ['115.238.56.198', '110.41.147.114', '8.129.13.54']:
+        try:
+            q = Quotes.factory(market='std', server=(fallback_ip, 7709), bestip=False)
+            d = q.bars(symbol='000001', category=4, offset=5)
+            if d is not None and len(d) > 0:
+                cfg = {'SERVER': {'HQ': [['fallback', fallback_ip, 7709]]}, 'BESTIP': {'HQ': [fallback_ip, 7709], 'EX': '', 'GP': ''}}
+                json.dump(cfg, open(os.path.join(cfg_dir, 'config.json'), 'w'))
+                print(f'{fallback_ip}:7709')
+                break
+        except Exception:
+            pass
 " 2>&1)
 if [ -n "$TDX_OK" ]; then
     log_info "TDX 服务器可用: $TDX_OK"
