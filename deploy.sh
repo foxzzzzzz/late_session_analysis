@@ -181,6 +181,14 @@ log_step "6/6 配置 systemd"
 SERVICE_NAME="late-session"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
+# 确定运行用户及其 HOME (保持一致, 避免 sudo 执行时 $HOME 指向 /root)
+RUN_USER="${SUDO_USER:-$USER}"
+if [ "$RUN_USER" = "root" ]; then
+    RUN_HOME="/root"
+else
+    RUN_HOME="/home/$RUN_USER"
+fi
+
 sudo tee "$SERVICE_FILE" > /dev/null << SERVEOF
 [Unit]
 Description=Late Session Analysis Web Dashboard
@@ -188,13 +196,13 @@ After=network.target
 
 [Service]
 Type=simple
-User=${SUDO_USER:-$USER}
+User=$RUN_USER
 WorkingDirectory=$APP_DIR
 ExecStart=$VENV_DIR/bin/python -m web.app --host 0.0.0.0 --port $PORT
 Restart=always
 RestartSec=10
 Environment=TZ=Asia/Shanghai
-Environment=HOME=$HOME
+Environment=HOME=$RUN_HOME
 Environment=WEB_INSTANCE_DIR=$APP_DIR/web_instance
 
 [Install]
