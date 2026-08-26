@@ -10,11 +10,19 @@ from __future__ import annotations
 import os
 import sys
 import argparse
+import logging
 from pathlib import Path
 from flask import Flask
 from dotenv import load_dotenv
 
 from web.db import init_db
+
+# 与 main.py 对齐的 logging 配置, 否则 pipeline 的 INFO 日志会被吞掉
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%H:%M:%S',
+)
 
 
 def create_app() -> Flask:
