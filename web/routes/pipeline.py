@@ -245,7 +245,7 @@ def stream(run_id: int):
         )
 
     return Response(
-        _stream_from_queue(run_id, q),
+        _stream_from_queue(run_id, q, app=current_app._get_current_object()),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
@@ -337,7 +337,7 @@ def _stream_and_run(app, run_id: int, q: queue.Queue, run: PipelineRun):
     yield f"event: done\ndata: {{\"status\": \"{status}\"}}\n\n"
 
 
-def _stream_from_queue(run_id: int, q: queue.Queue):
+def _stream_from_queue(run_id: int, q: queue.Queue, app=None):
     """Yield SSE events from live queue."""
     yield "event: connected\ndata: {}\n\n"
     while True:
@@ -348,10 +348,18 @@ def _stream_from_queue(run_id: int, q: queue.Queue):
         except queue.Empty:
             # Send heartbeat
             yield "event: heartbeat\ndata: {}\n\n"
-            # Check if run is done
-            run = db.session.get(PipelineRun, run_id)
-            if run and run.status != "running":
-                yield f"event: done\ndata: {{\"status\": \"{run.status}\"}}\n\n"
+            # Check if run is done (inside app context)
+            run_status = "running"
+            if app:
+                try:
+                    with app.app_context():
+                        run = db.session.get(PipelineRun, run_id)
+                        if run:
+                            run_status = run.status
+                except Exception:
+                    pass
+            if run_status != "running":
+                yield f"event: done\ndata: {{\"status\": \"{run_status}\"}}\n\n"
                 break
 
 
