@@ -126,6 +126,8 @@ def main():
     if '--write' in sys.argv:
         cfg_dir = os.path.expanduser('~/.mootdx')
         os.makedirs(cfg_dir, exist_ok=True)
+
+        # 1) mootdx 原生配置 (preloader 等直接调用 mootdx 的地方使用)
         cfg = {
             'SERVER': {'HQ': [['scan', best['addr'], best['port']]]},
             'BESTIP': {'HQ': [best['addr'], best['port']], 'EX': '', 'GP': ''},
@@ -133,6 +135,15 @@ def main():
         with open(os.path.join(cfg_dir, 'config.json'), 'w') as fp:
             json.dump(cfg, fp)
         print(f"已写入 {cfg_dir}/config.json")
+
+        # 2) 服务器池缓存 (KlineProvider 的故障转移池使用), 保存全部可用服务器
+        pool_cache = {
+            'version': 1,
+            'servers': [[s['addr'], s['port']] for s in ok_servers],
+        }
+        with open(os.path.join(cfg_dir, 'known_good.json'), 'w') as fp:
+            json.dump(pool_cache, fp)
+        print(f"已写入 {cfg_dir}/known_good.json ({len(ok_servers)} 台可用)")
     else:
         print("(添加 --write 参数可写入配置)")
 

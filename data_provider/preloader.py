@@ -132,18 +132,33 @@ class DataPreloader:
     # === 日K线 (MA计算用) ===
 
     def _load_daily_kline_mootdx(self):
-        """通过mootdx预加载全市场日K线"""
+        """通过mootdx预加载全市场日K线 (走服务器池, 自动故障转移)"""
         try:
+            from data_provider.tdx_server_pool import get_default_pool
+            pool = get_default_pool()
+            servers = pool.get_servers()
+            if not servers:
+                self.daily_kline = pd.DataFrame()
+                logger.warning("TDX 服务器池为空, K线预加载跳过")
+                return
+
             from mootdx.quotes import Quotes
-            client = Quotes.factory(market="std")
-            # 尝试拉取全市场日K线索引
-            df = client.bars(symbol="000001", category=4, offset=30)
-            if df is not None and not df.empty:
-                self.daily_kline = df
-                logger.info(f"mootdx K线测试: {len(df)} 条 (000001)")
-            else:
-                self.daily_kline = pd.DataFrame()  # fallback empty
-                logger.warning("mootdx K线返回空数据")
+            # 逐台尝试, 直到拿到真实数据
+            for addr, port in servers[:3]:
+                try:
+                    client = Quotes.factory(market="std", server=(addr, port))
+                    df = client.bars(symbol="000001", category=4, offset=30)
+                    if df is not None and not df.empty:
+                        self.daily_kline = df
+                        logger.info(f"mootdx K线测试: {len(df)} 条 (000001) @{addr}")
+                        return
+                    pool.mark_failed(addr, port)
+                except Exception:
+                    pool.mark_failed(addr, port)
+                    continue
+
+            self.daily_kline = pd.DataFrame()
+            logger.warning("mootdx K线返回空数据 (服务器池全部尝试失败)")
         except ImportError:
             self.daily_kline = pd.DataFrame()
             logger.info("mootdx 未安装，K线数据跳过 (pip install mootdx)")

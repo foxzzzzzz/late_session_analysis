@@ -103,49 +103,19 @@ else
 fi
 
 # ── 4. 检测 TDX 服务器 ───────────────────────────────────
-log_step "4/6 检测 TDX 服务器 (mootdx)"
+log_step "4/6 检测 TDX 服务器 (K线健康验证)"
 
-# 每次都重扫，避免旧配置指向不可达服务器
-log_info "扫描可用的 TDX 服务器..."
-rm -f "$MOOTDX_CFG"
-TDX_OK=$($PYTHON -c "
-import json, os
-from mootdx.quotes import Quotes
-
-# 优先用 mootdx 内置 bestip 选择 (真正测试可用性，非裸TCP)
-cfg_dir = os.path.expanduser('~/.mootdx')
-os.makedirs(cfg_dir, exist_ok=True)
-
-# 尝试标准 factory (会用 bestip 选最快服务器并验证数据)
-try:
-    q = Quotes.factory(market='std', bestip=True)
-    ip, port = q.server
-    # 验证真的能拉数据
-    d = q.bars(symbol='000001', category=4, offset=5)
-    if d is not None and len(d) > 0:
-        cfg = {'SERVER': {'HQ': [['bestip', ip, port]]}, 'BESTIP': {'HQ': [ip, port], 'EX': '', 'GP': ''}}
-        json.dump(cfg, open(os.path.join(cfg_dir, 'config.json'), 'w'))
-        print(f'{ip}:{port}')
-    else:
-        raise Exception('server OK but returned 0 rows')
-except Exception:
-    # bestip 可能选中了可达但不返数据的服务器，用已知可用IP兜底
-    for fallback_ip in ['115.238.56.198', '110.41.147.114', '8.129.13.54']:
-        try:
-            q = Quotes.factory(market='std', server=(fallback_ip, 7709), bestip=False)
-            d = q.bars(symbol='000001', category=4, offset=5)
-            if d is not None and len(d) > 0:
-                cfg = {'SERVER': {'HQ': [['fallback', fallback_ip, 7709]]}, 'BESTIP': {'HQ': [fallback_ip, 7709], 'EX': '', 'GP': ''}}
-                json.dump(cfg, open(os.path.join(cfg_dir, 'config.json'), 'w'))
-                print(f'{fallback_ip}:7709')
-                break
-        except Exception:
-            pass
-" 2>&1)
-if [ -n "$TDX_OK" ]; then
-    log_info "TDX 服务器可用: $TDX_OK"
+# 大量TDX服务器能连但K线返回空, 必须用真实K线验证。
+# 脚本会扫描140+台, 结果缓存到 ~/.mootdx/known_good.json (运行期自动故障转移用)
+log_info "扫描 TDX 服务器 (约30-60秒)..."
+if $PYTHON "$APP_DIR/tools/scan_tdx_servers.py" --write > /tmp/tdx_scan.log 2>&1; then
+    TDX_OK=$(grep "推荐服务器" /tmp/tdx_scan.log | head -1 | awk '{print $2}')
+    TDX_CNT=$(grep "K线可用" /tmp/tdx_scan.log | head -1)
+    log_info "TDX 扫描完成: ${TDX_CNT:-见日志}"
+    [ -n "$TDX_OK" ] && log_info "主用服务器: $TDX_OK"
 else
-    log_warn "所有 TDX 服务器不可达，K线将自动降级到 Sina HTTP"
+    log_warn "TDX 扫描失败, 详见 /tmp/tdx_scan.log"
+    tail -5 /tmp/tdx_scan.log 2>/dev/null
 fi
 
 # ── 5. 配置文件 ──────────────────────────────────────────

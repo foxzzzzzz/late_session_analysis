@@ -44,17 +44,71 @@ class KlineProvider:
         self._cache_dir = cache_dir
         os.makedirs(self._cache_dir, exist_ok=True)
 
+        # 服务器池: 管理可用 TDX 服务器 + 自动故障转移
+        from data_provider.tdx_server_pool import get_default_pool
+        self._pool = get_default_pool()
+        self._server_index = 0
+        self._current_server: tuple[str, int] | None = None
+
     @property
     def client(self):
-        """Lazy mootdx client — returns None if TCP unreachable."""
+        """Lazy mootdx client — 从服务器池取可用服务器, 池空则返回 None。"""
         if self._client is None and self._client_error is None:
-            try:
-                from mootdx.quotes import Quotes
-                self._client = Quotes.factory(market=self._market)
-            except Exception as e:
-                self._client_error = str(e)
-                logger.warning(f"mootdx 不可用 (TCP 7709): {e}")
+            self._client = self._create_client()
         return self._client
+
+    def _create_client(self):
+        """按服务器池顺序尝试创建可用 client"""
+        try:
+            from mootdx.quotes import Quotes
+        except ImportError as e:
+            self._client_error = str(e)
+            logger.warning(f"mootdx 未安装: {e}")
+            return None
+
+        servers = self._pool.get_servers()
+        if not servers:
+            self._client_error = "no usable TDX server"
+            logger.warning("TDX 服务器池为空 — K线将降级到 Sina HTTP")
+            return None
+
+        # 从上次成功的位置开始试, 避免每次都重试第一台
+        for offset in range(len(servers)):
+            idx = (self._server_index + offset) % len(servers)
+            addr, port = servers[idx]
+            try:
+                c = Quotes.factory(market=self._market, server=(addr, port))
+                # 验证这台真能返回数据 (服务器常"能连但K线空")
+                probe = c.bars(symbol="000001", category=4, offset=5)
+                if probe is not None and len(probe) > 0:
+                    self._server_index = idx
+                    self._current_server = (addr, port)
+                    logger.info(f"TDX 服务器: {addr}:{port} (第{idx + 1}/{len(servers)}台)")
+                    return c
+                # 能连但无数据 → 标记失效
+                self._pool.mark_failed(addr, port)
+            except Exception as e:
+                logger.debug(f"TDX 服务器 {addr}:{port} 连接失败: {e}")
+                self._pool.mark_failed(addr, port)
+
+        self._client_error = "all cached servers failed"
+        logger.warning("TDX 缓存服务器全部失效 — 重新扫描")
+        refreshed = self._pool.refresh()
+        if refreshed:
+            self._client_error = None  # 允许下次重试
+            self._server_index = 0
+            return self._create_client()
+        logger.warning("TDX 服务器全部不可用 — K线降级到 Sina HTTP")
+        return None
+
+    def _rotate_server(self, reason: str) -> None:
+        """当前服务器失效, 标记并切换下一台"""
+        if self._current_server:
+            logger.warning(f"TDX 服务器切换 (原因: {reason})")
+            self._pool.mark_failed(*self._current_server)
+        self._client = None
+        self._client_error = None
+        self._current_server = None
 
     # ================================================================
     # 数据获取
@@ -72,6 +126,8 @@ class KlineProvider:
         fetched = 0
         cached = 0
         sina_fallback = 0
+        mootdx_tried = 0
+        mootdx_ok = 0
 
         for code in codes:
             code = str(code).zfill(6)
@@ -92,9 +148,11 @@ class KlineProvider:
             df = None
             if self.client is not None:
                 try:
+                    mootdx_tried += 1
                     df = self.client.bars(symbol=code, frequency=9, offset=bars)
                     if df is not None and not df.empty:
                         df = self._normalize_columns(df)
+                        mootdx_ok += 1
                 except Exception as e:
                     logger.debug(f"日线 mootdx 获取失败 {code}: {e}")
 
@@ -112,9 +170,15 @@ class KlineProvider:
                 result[code] = df
                 fetched += 1
 
+        # 批次级健康判断: mootdx 全部空返回 → 当前服务器失效
+        if mootdx_tried >= 10 and mootdx_ok == 0:
+            self._rotate_server(f"日线批量 {mootdx_tried} 只全部空返回")
+
         parts = [f"{len(result)}/{len(codes)} 只 (缓存 {cached}, 新拉取 {fetched}"]
         if sina_fallback:
             parts.append(f"Sina回退 {sina_fallback}")
+        if mootdx_tried and not mootdx_ok:
+            parts.append("mootdx全空")
         parts.append(")")
         logger.info(f"日线加载: {', '.join(parts)}")
         return result
@@ -209,6 +273,10 @@ class KlineProvider:
                 code, df = future.result()
                 if df is not None and not df.empty:
                     result[code] = df
+
+        # 批次级健康判断: 5分钟线是S2的核心输入, 全空必须换台
+        if unique_codes and not result:
+            self._rotate_server(f"5分钟线批量 {len(unique_codes)} 只全部空返回")
 
         if result:
             logger.info(f"5分钟线加载: {len(result)}/{len(codes)} 只")
