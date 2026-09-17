@@ -9,7 +9,7 @@
 | 📈 行情 | 换手率 | {{ "%.1f%%"|format(stock.turnover_rate) }} |
 | 🔍 异动 | 类型 | {{ stock.anomaly_type }} |
 | 🔍 异动 | 尾盘涨幅 | {{ "%+.2f%%"|format(stock.late_price_change) }} |
-| 🔍 异动 | 量比 | {{ "%.1f"|format(stock.afternoon_volume_ratio) }}x |
+| 🔍 异动 | 尾盘量比 | {{ "%.1f"|format(stock.late_volume_ratio) }}x |
 | 💰 资金 | 大单净流入 | {{ "%.0f"|format(stock.big_order_net/1e4) }}万 |
 | 💰 资金 | 大单占比 | {{ "%.1f%%"|format(stock.big_order_ratio*100) }} |
 | 💰 资金 | 主动买入 | {{ "%.1f%%"|format(stock.active_buy_ratio) }} |
