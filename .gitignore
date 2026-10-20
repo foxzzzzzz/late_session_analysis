@@ -7,3 +7,4 @@ backtest_reports/
 live_snapshots/
 web_instance/
 .claude/settings.local.json
+/tmp/

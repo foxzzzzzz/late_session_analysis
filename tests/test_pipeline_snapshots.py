@@ -42,6 +42,21 @@ def make_ctx(code="000001"):
     )
 
 
+def test_regime_refresh_updates_kline_thresholds():
+    """行业预加载后变为熊市时，S1阈值也必须同步切换。"""
+    pipeline = make_pipeline()
+    pipeline.preloader.sector_performance = {"电子": -2.0}
+    pipeline._fetch_market_overview = MagicMock(return_value={})
+    pipeline._generate_report = MagicMock(return_value="report.md")
+    expected = pipeline.config.get_screening_configs("bear")["kline"]
+
+    with patch.object(SystemConfig, "resolve_regime", return_value="bear"):
+        pipeline.run(stages=[])
+
+    assert pipeline.regime == "bear"
+    assert pipeline.kline_config == expected
+
+
 def test_write_stage_snapshot_serializes_contexts_and_metrics():
     pipeline = make_pipeline()
     ctx = make_ctx("000001")

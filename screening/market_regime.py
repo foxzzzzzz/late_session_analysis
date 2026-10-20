@@ -46,17 +46,53 @@ def _save_regime(state: dict):
 
 
 def _fetch_sh_index() -> Optional[pd.DataFrame]:
-    """拉取上证指数日线 (mootdx, symbol=999999)"""
+    """使用共享服务器池拉取上证指数日线；指数接口使用000001。"""
     try:
         from mootdx.quotes import Quotes
-        client = Quotes.factory(market="std")
-        df = client.index(symbol="999999", category=4, offset=50)
-        if df is not None and not df.empty:
-            return df
+        from data_provider.tdx_server_pool import get_default_pool
+
+        bars = int(os.getenv("MARKET_INDEX_BARS", "50"))
+        timeout = float(os.getenv("MARKET_INDEX_TIMEOUT", "5"))
+        max_servers = int(os.getenv("MARKET_INDEX_MAX_SERVERS", "3"))
+        servers = get_default_pool().get_servers()[:max_servers]
     except ImportError:
-        logger.debug("mootdx 未安装, 无法获取上证指数")
+        logger.warning("mootdx 未安装, 无法获取上证指数")
+        return None
     except Exception as e:
-        logger.warning(f"上证指数获取失败: {e}")
+        logger.warning(f"上证指数服务器池初始化失败: {e}")
+        return None
+
+    for addr, port in servers:
+        client = None
+        try:
+            client = Quotes.factory(
+                market="std", server=(addr, port), timeout=timeout,
+                auto_retry=False, raise_exception=True,
+            )
+            # 必须使用指数接口：bars('000001')取到的是深市平安银行。
+            df = client.index(symbol="000001", frequency=9, offset=bars)
+            if df is None or df.empty:
+                raise ValueError("指数接口返回空数据")
+            if "close" not in df.columns:
+                raise ValueError("指数数据缺少close列")
+            close = pd.to_numeric(df["close"], errors="coerce")
+            if len(close) < 25:
+                raise ValueError(f"指数日线不足25根 ({len(close)})")
+            if not ((close > 0) & (close < float("inf"))).all():
+                raise ValueError("指数收盘价包含无效值")
+            logger.info(f"上证指数日线获取成功: {len(df)} 根, TDX={addr}:{port}, 代码=000001")
+            return df
+        except Exception as e:
+            logger.warning(f"上证指数获取失败 TDX={addr}:{port}: {e}; 尝试下一台")
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception as e:
+                    logger.debug(f"上证指数连接关闭失败: {e}")
+
+    # 指数接口失败不等于个股接口失败，不将服务器移出共享池。
+    logger.warning(f"上证指数获取全部失败 (尝试{len(servers)}台), 将回退中性阈值")
     return None
 
 

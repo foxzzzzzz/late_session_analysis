@@ -220,6 +220,7 @@ class LateSessionPipeline:
                 )
                 self.regime = new_regime
                 screening_configs = self.config.get_screening_configs(self.regime)
+                self.kline_config = screening_configs.get('kline')
                 self.funnel = FunnelPipeline(
                     config=FunnelConfig(**screening_configs),
                     preloader=self.preloader,
