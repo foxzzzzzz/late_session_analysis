@@ -114,7 +114,7 @@ class TdxServerPool:
         self._lock = threading.Lock()
         # 已验证可用 (有序, 优先复用)
         self._good: list[tuple[str, int]] = []
-        # 本次运行中确认失效
+        # 当前故障切换中失效；全量扫描仍需重新探测，不能永久排除。
         self._failed: set[tuple[str, int]] = set()
         self._loaded = False
 
@@ -152,8 +152,13 @@ class TdxServerPool:
 
     def scan(self, limit_workers: int = SCAN_WORKERS) -> list[tuple[str, int]]:
         """全量扫描所有已知服务器, 返回可用的 (按发现顺序)"""
-        candidates = [s for s in _collect_servers() if s not in self._failed]
-        logger.info(f"TDX 服务器池: 扫描 {len(candidates)} 台服务器...")
+        # 全量扫描是恢复入口，必须包含曾失败的节点，否则少数可用节点
+        # 被临时故障移除后，会永远只扫描剩余不可用节点。
+        candidates = _collect_servers()
+        logger.info(
+            f"TDX 服务器池: 扫描 {len(candidates)} 台服务器 "
+            f"(其中此前标记失败 {len(self._failed)} 台，重新探测)..."
+        )
 
         found: list[tuple[str, int]] = []
         with ThreadPoolExecutor(max_workers=limit_workers) as ex:
@@ -196,7 +201,7 @@ class TdxServerPool:
         return self.refresh()
 
     def mark_failed(self, addr: str, port: int) -> None:
-        """标记服务器失效, 后续不再使用"""
+        """从可用池移除失效服务器，待全量扫描重新验证。"""
         with self._lock:
             key = (addr, int(port))
             self._failed.add(key)
