@@ -2,12 +2,18 @@
 {% block title %}管线 #{{ run.id }} — 尾盘分析系统{% endblock %}
 
 {% block content %}
-<div data-pipeline-detail="{{ run.id }}" data-cursor="{{ logs[-1].id if logs else 0 }}">
+<div data-pipeline-detail="{{ run.id }}" data-cursor="{{ logs[-1].id if logs else 0 }}" data-generation="{{ run.started_at.isoformat() }}">
 <div class="page-header">
     <h1><i class="bi bi-journal-text me-2"></i>管线执行详情</h1>
     <a href="/pipeline" class="btn btn-outline-light btn-sm">
         <i class="bi bi-arrow-left me-1"></i>返回列表
     </a>
+</div>
+
+<p class="text-muted">新运行的正式评分、排序和推荐等级仅由规则决定；LLM旁路记录见下方日志，不参与加减分或否决。</p>
+<div class="card mb-3">
+    <div class="card-header">LLM后台补充：<span data-sidecar-status>等待查询</span></div>
+    <pre class="card-body mb-0" style="white-space:pre-wrap" data-sidecar-results>正式推荐不等待旁路，补充结果不改分、不改级、不新增模拟交易。</pre>
 </div>
 
 <div class="row g-3 mb-3">

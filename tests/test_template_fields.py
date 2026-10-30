@@ -73,7 +73,7 @@ class TestStrongBuyRendering:
             sector_performance=1.2, ma_alignment="bullish",
             score_tail_strength=25, score_technical=20, score_capital=15,
             score_ma_system=12, score_market_env=6,
-            llm_decision="buy", llm_confidence="A", llm_score=80.0, llm_reason="test",
+            llm_analysis={'fallback': True, 'summary': '未评估', 'unknowns': ['公告缺失']},
         ).items():
             setattr(ctx, k, v)
         return ctx

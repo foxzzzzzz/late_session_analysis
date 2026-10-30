@@ -6,6 +6,7 @@
 东财请求统一走 rate_limiter.em_get() 门控 (QPS≤1)。
 """
 import logging
+import re
 import time
 from datetime import datetime, timedelta
 from typing import Optional
@@ -43,7 +44,8 @@ class NewsFetcher:
     def __init__(self, lookback_days: int = 3):
         self.lookback_days = lookback_days
 
-    def fetch_announcements(self, code: str, max_items: int = 30) -> list[dict]:
+    def fetch_announcements(self, code: str, max_items: int = 30, timeout: float = 15,
+                            deadline: float = None) -> list[dict]:
         """获取个股公告列表
 
         Args:
@@ -63,8 +65,9 @@ class NewsFetcher:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/117.0.0.0'}
 
         try:
-            r = em_get(self.BASE_URL, params=params, headers=headers, timeout=15)
+            r = em_get(self.BASE_URL, params=params, headers=headers, timeout=timeout, deadline=deadline)
             r.raise_for_status()
+            r.encoding = 'utf-8'
             data = r.json()
             if data.get('success') and data.get('data'):
                 return data['data'].get('list', [])
@@ -74,6 +77,70 @@ class NewsFetcher:
             logger.warning(f"公告API解析失败 [{code}]: {e}")
 
         return []
+
+    def collect_evidence(self, code: str, as_of: datetime, *, max_items: int,
+                         max_chars: int, timeout: float, lookback_days: int = None,
+                         deadline: float = None) -> dict:
+        """旁路公告原文摘录。仅接纳明确披露时间，不能将日期当成盘中可见时间。"""
+        items, unknowns = [], []
+        if deadline is not None and time.monotonic() >= deadline:
+            return {'status': 'unavailable', 'items': [], 'unknowns': ['旁路整批截止，未获取公告']}
+        notices = self.fetch_announcements(code, timeout=timeout, deadline=deadline)
+        if not notices:
+            return {'status': 'unavailable', 'items': [],
+                    'unknowns': ['公告列表为空或获取失败，不代表无公告/无风险']}
+        cutoff = as_of - timedelta(days=lookback_days if lookback_days is not None else self.lookback_days)
+        seen = set()
+        attempted = 0
+        for notice in notices:
+            if deadline is not None and time.monotonic() >= deadline:
+                unknowns.append('旁路整批截止，剩余公告未获取')
+                break
+            if attempted >= max_items:
+                break
+            stamp = notice.get('display_time', '')
+            try:
+                # 数据源格式: YYYY-MM-DD HH:MM:SS:毫秒。
+                stamp = re.sub(r'(?<=\d{2}:\d{2}:\d{2}):(\d+)$', r'.\1', stamp)
+                published = datetime.fromisoformat(stamp)
+            except (ValueError, TypeError):
+                unknowns.append(f"发布时间不明确，未采用: {notice.get('title', '')}")
+                continue
+            if published > as_of or published < cutoff:
+                continue
+            art_code = notice.get('art_code')
+            if not art_code or art_code in seen:
+                continue
+            seen.add(art_code)
+            attempted += 1
+            endpoint = 'https://np-cnotice-stock.eastmoney.com/api/content/ann'
+            try:
+                r = em_get(endpoint, params={'art_code': art_code, 'client_source': 'web',
+                                             'page_index': 1}, timeout=timeout, deadline=deadline)
+                r.raise_for_status()
+                r.encoding = 'utf-8'
+                content = r.json().get('data') or {}
+                if content.get('is_ai_summary') in (True, 1, '1', 'true'):
+                    unknowns.append(f'返回的是AI摘要而非原文，未采用: {art_code}')
+                    continue
+                text = content.get('notice_content') or ''
+                if not text.strip():
+                    unknowns.append(f'公告原文未获取: {art_code}')
+                    continue
+                items.append({
+                    'id': f'E{len(items)+1}', 'title': notice.get('title', ''),
+                    'published_at': published.isoformat(),
+                    'source': 'eastmoney_announcement',
+                    'url': f'{endpoint}?art_code={art_code}&client_source=web&page_index=1',
+                    'attachment_url': content.get('attach_url', ''),
+                    'text': text[:max_chars], 'truncated': len(text) > max_chars,
+                })
+            except (requests.RequestException, ValueError, TypeError) as e:
+                logger.warning(f'旁路公告正文获取失败 [{code}/{art_code}]: {type(e).__name__}')
+                unknowns.append(f'公告原文获取失败: {art_code}')
+        # 数量、正文长度和列表覆盖均有限，不能据此断言不存在其他事件。
+        unknowns.append('公告列表及原文摘录覆盖有限，不代表完整新闻检索或无其他风险')
+        return {'status': 'partial' if items else 'unavailable', 'items': items, 'unknowns': unknowns}
 
     def check_bad_news(self, code: str) -> bool:
         """检查个股近N日是否有重大利空公告

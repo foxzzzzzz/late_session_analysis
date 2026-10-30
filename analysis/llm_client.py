@@ -20,6 +20,8 @@ class LLMClient:
         max_tokens: int = 1024,
         temperature: float = 0.3,
         timeout: int = 15,
+        thinking_enabled: Optional[bool] = None,
+        max_retries: Optional[int] = None,
     ):
         self.provider = provider or os.getenv("LLM_PROVIDER", "deepseek")
         self.model = model or os.getenv("LLM_MODEL", "deepseek-chat")
@@ -28,13 +30,19 @@ class LLMClient:
         self.max_tokens = max_tokens or int(os.getenv("LLM_MAX_TOKENS", "1024"))
         self.temperature = temperature or float(os.getenv("LLM_TEMPERATURE", "0.3"))
         self.timeout = timeout
+        self.thinking_enabled = (os.getenv('LLM_THINKING_ENABLED', 'false').lower() in ('true', '1', 'yes')
+                                 if thinking_enabled is None else thinking_enabled)
+        self.max_retries = max(0, int(os.getenv('LLM_MAX_RETRIES', '0')) if max_retries is None else max_retries)
 
         self._model_id = f"{self.provider}/{self.model}"
 
-    def chat(self, system_prompt: str, user_prompt: str, max_retries: int = 2) -> Optional[str]:
+    def chat(self, system_prompt: str, user_prompt: str, max_retries: Optional[int] = None,
+             timeout: Optional[float] = None) -> Optional[str]:
         """发送聊天请求，空响应/失败时指数退避重试"""
+        deadline = time.monotonic() + timeout if timeout is not None else None
         import litellm
         litellm.suppress_debug_info = True
+        max_retries = self.max_retries if max_retries is None else max_retries
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -42,15 +50,22 @@ class LLMClient:
         ]
 
         for attempt in range(max_retries + 1):
+            request_timeout = min(self.timeout, deadline-time.monotonic()) if deadline is not None else self.timeout
+            if request_timeout <= 0:
+                return None
             try:
                 kwargs = {
                     "model": self._model_id,
                     "messages": messages,
                     "max_tokens": self.max_tokens,
                     "temperature": self.temperature,
-                    "timeout": self.timeout,
+                    "timeout": request_timeout,
                     "response_format": {"type": "json_object"},
+                    "num_retries": 0,  # 避免SDK隐藏重试叠加；重试次数由本客户端配置统一控制。
                 }
+                if self.provider == 'deepseek':
+                    kwargs['extra_body'] = {'thinking': {
+                        'type': 'enabled' if self.thinking_enabled else 'disabled'}}
                 if self.api_key:
                     kwargs["api_key"] = self.api_key
                 if self.api_base:
@@ -76,6 +91,8 @@ class LLMClient:
 
                 if attempt < max_retries:
                     delay = (2 ** attempt) + random.uniform(0, 1)
+                    if deadline is not None and delay >= deadline-time.monotonic():
+                        return None
                     logger.warning(
                         f"LLM返回空内容 (finish_reason={response.choices[0].finish_reason}), "
                         f"退避 {delay:.1f}s 后重试 {attempt + 1}/{max_retries} "
@@ -86,6 +103,8 @@ class LLMClient:
             except Exception as e:
                 if attempt < max_retries:
                     delay = (2 ** attempt) + random.uniform(0, 1)
+                    if deadline is not None and delay >= deadline-time.monotonic():
+                        return None
                     logger.warning(
                         f"LLM调用失败，退避 {delay:.1f}s 后重试 {attempt + 1}/{max_retries} "
                         f"({self._model_id}): {e}"

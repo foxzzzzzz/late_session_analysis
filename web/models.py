@@ -45,6 +45,18 @@ class PipelineRun(db.Model):  # type: ignore
     snapshot_dir = db.Column(String(256), nullable=True)
 
 
+class PipelineSidecar(db.Model):  # type: ignore
+    """独立旁路状态；不修改正式推荐表，generation隔离同日重跑。"""
+    __tablename__ = 'pipeline_sidecars'
+    run_id = db.Column(Integer, ForeignKey('pipeline_runs.id'), primary_key=True)
+    generation = db.Column(String(32), nullable=False)
+    run_started_at = db.Column(DateTime, nullable=False)
+    status = db.Column(String(24), nullable=False, default='pending')
+    deadline_at = db.Column(DateTime, nullable=True)
+    finished_at = db.Column(DateTime, nullable=True)
+    results_json = db.Column(Text, nullable=True)
+
+
 class DailyRecommendation(db.Model):  # type: ignore
     """Stocks recommended at strong_buy / buy / watch level each day."""
 

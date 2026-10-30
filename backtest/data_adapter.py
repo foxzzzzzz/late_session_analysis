@@ -185,6 +185,7 @@ class HistoricalDataAdapter:
                 if float(r.get('close', 0)) > float(r.get('open', 0))
             )
             ctx.history_win_rate = wins / len(recent) * 100
+            ctx.data_quality_flags['history_sample_count'] = len(recent)
         # 无日线数据时 MA/波动率保持为 0 (L3 会将其标记为数据缺失)
 
         return ctx

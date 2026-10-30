@@ -582,7 +582,7 @@ class BacktestEngine:
         sorted_ctx = sorted(scored, key=lambda c: c.total_score, reverse=True)
         top30 = sorted_ctx[:self.l4_config.max_total_output]
 
-        # 融合排序 (纯规则, 无LLM → merger自动使用rule_weight=1.0)
+        # 纯规则排序；与实盘相同，LLM不参与正式评分。
         regime = self._day_regimes.get(date_str, self.config.regime_mode)
         if regime == "auto":
             regime = "neutral"

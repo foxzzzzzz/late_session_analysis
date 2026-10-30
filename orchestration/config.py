@@ -31,6 +31,15 @@ class SystemConfig:
     llm_max_tokens: int = 4096
     llm_temperature: float = 0.3
     llm_timeout: int = 30
+    llm_batch_timeout: float = 30.0  # 整批旁路预算，含排队、限流、公告和模型；与股票数无关
+    llm_thinking_enabled: bool = False  # DeepSeek旁路默认关闭思考，其他提供商不下发此参数
+    llm_max_retries: int = 0           # 默认不重试，避免失败时放大单股耗时
+    llm_evidence_max_items: int = 3   # 每股最多接纳的公告原文条数
+    llm_evidence_max_chars: int = 4000  # 每条原文摘录字符上限
+    llm_evidence_timeout: float = 5.0  # 公告列表/正文每次HTTP超时(秒)
+    llm_evidence_lookback_days: int = 3  # 公告证据回看自然日数
+    llm_max_workers: int = 4         # 旁路并发数
+    capital_missing_threshold_offset: float = -10.0  # 保留原有资金缺失阈值偏移
 
     # === 筛选阈值 ===
     l1_min_turnover: float = 50_000_000
@@ -103,7 +112,7 @@ class SystemConfig:
     l4_hot_concept_max: float = 4.0                                           # 概念分上限(无analyzer)
     l4_leader_bonus: float = 1.0                                              # 龙头效应附加分
 
-    # === Rule Scorer (LLM降级规则评分) ===
+    # === Rule Scorer（历史兼容参数，不再充当LLM输出） ===
     rule_late_price_tiers: str = '[[4,3],[2,2],[1,1]]'                        # 尾盘涨幅信号 [阈值,权重]
     rule_vol_ratio_tiers: str = '[[2.5,3],[1.5,2],[1.0,1]]'                  # 量比信号
     rule_big_order_tiers: str = '[[0.3,3]]'                                   # 大单信号 (ratio>=0.3且net>0→3分)
@@ -194,6 +203,15 @@ class SystemConfig:
         self.llm_max_tokens = int(os.getenv("LLM_MAX_TOKENS", str(self.llm_max_tokens)))
         self.llm_temperature = float(os.getenv("LLM_TEMPERATURE", str(self.llm_temperature)))
         self.llm_timeout = int(os.getenv("LLM_TIMEOUT", str(self.llm_timeout)))
+        self.llm_batch_timeout = max(0.01, float(os.getenv('LLM_BATCH_TIMEOUT', str(self.llm_batch_timeout))))
+        self.llm_thinking_enabled = os.getenv('LLM_THINKING_ENABLED', str(self.llm_thinking_enabled)).lower() in ('true', '1', 'yes')
+        self.llm_max_retries = max(0, int(os.getenv('LLM_MAX_RETRIES', str(self.llm_max_retries))))
+        for key in ('llm_evidence_max_items', 'llm_evidence_max_chars',
+                    'llm_evidence_lookback_days', 'llm_max_workers'):
+            setattr(self, key, max(1, int(os.getenv(key.upper(), str(getattr(self, key))))))
+        self.llm_evidence_timeout = max(0.1, float(os.getenv('LLM_EVIDENCE_TIMEOUT', str(self.llm_evidence_timeout))))
+        self.capital_missing_threshold_offset = float(os.getenv(
+            'CAPITAL_MISSING_THRESHOLD_OFFSET', str(self.capital_missing_threshold_offset)))
 
         self.l1_min_turnover = float(os.getenv("L1_MIN_TURNOVER", str(self.l1_min_turnover)))
         self.l1_min_turnover_rate = float(os.getenv("L1_MIN_TURNOVER_RATE", str(self.l1_min_turnover_rate)))

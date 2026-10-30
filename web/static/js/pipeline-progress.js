@@ -23,7 +23,7 @@
         let again = true;
         let wait = delay;
         try {
-            const url = detail ? `/pipeline/status/${detail.dataset.pipelineDetail}?after=${cursor}`
+            const url = detail ? `/pipeline/status/${detail.dataset.pipelineDetail}?after=${cursor}&generation=${encodeURIComponent(detail.dataset.generation)}`
                                : '/api/recent-runs';
             const response = await fetch(url, {cache: 'no-store'});
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -47,6 +47,11 @@
                 note.textContent = '已连接 · 每阶段完成后更新';
             }
             if (detail) {
+                if (detail.dataset.generation !== data.run_generation) {
+                    detail.dataset.generation = data.run_generation;
+                    detail.querySelector('[data-log-container]').replaceChildren();
+                    cursor = 0;
+                }
                 renderStatus(detail.querySelector('[data-run-status]'), data.status);
                 detail.querySelector('[data-run-regime]').textContent = data.regime;
                 detail.querySelector('[data-run-finished]').textContent = data.finished_at ?? '–';
@@ -67,8 +72,17 @@
                 if (atBottom) terminal.scrollTop = terminal.scrollHeight;
                 detail.querySelector('[data-log-count]').textContent = `${data.total_logs} 条记录`;
                 cursor = data.cursor;
+                const sidecar = data.sidecar ?? {status: 'not_requested', results: {}};
+                const sidecarLabels = {pending: '待后台分析', running: '分析中', completed: '已完成',
+                    partial: '部分完成，其余未评估', timed_out: '整批截止，未完成项未评估',
+                    failed: '分析失败，正式结果不变', disabled: '未启用', not_requested: '尚未请求'};
+                detail.querySelector('[data-sidecar-status]').textContent = sidecarLabels[sidecar.status] ?? sidecar.status;
+                detail.querySelector('[data-sidecar-results]').textContent = Object.keys(sidecar.results).length
+                    ? JSON.stringify(sidecar.results, null, 2) : '尚无旁路补充；正式推荐不受影响。';
                 // 完成后仍需读完所有分页，防止漏掉末轮/异常日志。
                 again = ['running', 'pending'].includes(data.status) ||
+                        ['pending', 'running'].includes(sidecar.status) ||
+                        sidecar.refresh_pending ||
                         (data.logs.length && terminal.querySelectorAll('.log-line').length < data.total_logs);
                 if (terminal.querySelectorAll('.log-line').length < data.total_logs) wait = 0;
                 note.textContent = `${again ? '已连接' : '已结束'} · 最后进展 ${data.last_progress_at ?? '暂无'}`;

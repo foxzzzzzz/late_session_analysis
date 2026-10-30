@@ -145,7 +145,10 @@ def main():
         print("\n" + "=" * 60)
         print("尾盘分析完成!")
         print(f"报告: {path}")
-        print("=" * 60)
+        print("=" * 60, flush=True)
+        # 规则报告已经发布；CLI保持进程存活以保存有截止时间的后台补充。
+        if pipeline.sidecar_thread is not None:
+            pipeline.sidecar_thread.join(timeout=config.llm_batch_timeout)
 
     except RuntimeError as e:
         logger.error(f"运行失败: {e}")

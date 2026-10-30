@@ -24,7 +24,7 @@ def _scheduled_log(run_id: int, stage: str, level: str, message: str) -> None:
 
 
 def _prepare_scheduled_run(today: date):
-    from web.models import db, PipelineRun, PipelineLog, DailyRecommendation, SimulatedTrade
+    from web.models import db, PipelineRun
 
     existing = PipelineRun.query.filter_by(trading_date=today).first()
     if existing and existing.status in ("running", "pending"):
@@ -32,18 +32,9 @@ def _prepare_scheduled_run(today: date):
 
     if existing:
         # Overwrite earlier completed/failed runs with fresh scheduled execution
-        old_recs = DailyRecommendation.query.filter_by(run_id=existing.id).all()
-        old_rec_ids = [rec.id for rec in old_recs]
-        if old_rec_ids:
-            SimulatedTrade.query.filter(
-                SimulatedTrade.recommendation_id.in_(old_rec_ids)
-            ).delete(synchronize_session=False)
-        DailyRecommendation.query.filter_by(run_id=existing.id).delete(synchronize_session=False)
-        PipelineLog.query.filter_by(run_id=existing.id).delete(synchronize_session=False)
-        existing.status = "running"
-        existing.started_at = datetime.now()
-        existing.finished_at = None
-        existing.stages_json = None
+        from web.services.pipeline_service import restart_pipeline_run
+        if not restart_pipeline_run(existing):
+            return None, 'Pipeline generation changed; retry later'
         run = existing
     else:
         run = PipelineRun(
@@ -60,7 +51,7 @@ def _execute_scheduled_pipeline(app: Flask) -> None:
     """Run the scheduled pipeline once, reusing failed same-day runs."""
     with app.app_context():
         from web.models import db, PipelineRun
-        from web.services.pipeline_service import PipelineService, save_pipeline_results
+        from web.services.pipeline_service import PipelineService, save_pipeline_results, finish_pipeline_run
 
         today = date.today()
 
@@ -88,11 +79,7 @@ def _execute_scheduled_pipeline(app: Flask) -> None:
 
             save_pipeline_results(run.id, results)
 
-            run = db.session.get(PipelineRun, run.id)
-            if run:
-                run.status = "completed"
-                run.finished_at = datetime.now()
-                db.session.commit()
+            finish_pipeline_run(run.id, 'completed', results, service)
 
             app.logger.info(f"Pipeline completed for {today}")
 
@@ -104,11 +91,7 @@ def _execute_scheduled_pipeline(app: Flask) -> None:
             _scheduled_log(run.id, "SYS", "ERROR", f"Scheduled pipeline failed: {e}")
             _scheduled_log(run.id, "SYS", "ERROR", traceback.format_exc()[-500:])
             try:
-                run = db.session.get(PipelineRun, run.id)
-                if run:
-                    run.status = "failed"
-                    run.finished_at = datetime.now()
-                    db.session.commit()
+                finish_pipeline_run(run.id, 'failed', locals().get('results', {}), locals().get('service'))
             except Exception:
                 pass
 

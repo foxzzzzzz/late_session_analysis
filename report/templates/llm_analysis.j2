@@ -1,0 +1,23 @@
+{# 所有内容为模型旁路研究，引用匹配不等于事实经独立核实。 #}
+### {{ stock.code }} {{ stock.name }} — LLM旁路分析
+
+{% if stock.llm_analysis.get('status') == 'pending' -%}
+**后台待分析**；正式规则结果已发布，完成后单独补充。
+{% elif stock.llm_analysis.get('fallback', true) -%}
+**未评估**；正式规则推荐不受影响。
+{% else -%}
+**模型摘要（待复核）**：{{ stock.llm_analysis.get('summary', '') }}
+{% endif -%}
+
+分析时点（Asia/Shanghai）：{{ stock.llm_analysis.get('as_of', '未记录') }}；证据覆盖：{{ stock.llm_analysis.get('evidence_status', '未获取') }}。
+
+{% for event in stock.llm_analysis.get('events', []) -%}
+- 模型标注 **{{ event.classification }}**；影响对象：{{ event.subject }}；{{ event.description }}
+  原文引用：“{{ event.quote }}”；[{{ event.evidence_id }}]({{ event.source_url }})；披露时间 {{ event.published_at }}。{% if event.quote_match_mode == 'whitespace_only' %}引用仅忽略空白后匹配{% else %}引用逐字匹配{% endif %}，事实仍待复核。
+{% endfor -%}
+{% for conflict in stock.llm_analysis.get('conflicts', []) -%}
+- 模型解释的信号冲突：{{ conflict }}
+{% endfor -%}
+{% for unknown in stock.llm_analysis.get('unknowns', []) -%}
+- 未知/待核实：{{ unknown }}
+{% endfor -%}

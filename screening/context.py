@@ -85,7 +85,7 @@ class StockContext:
     consecutive_close_rise: int = 0    # 连续收盘上涨天数 (B维度涨幅稳定性用)
     has_bad_news: bool = False          # 近3日有无利空
     is_unlock_date: bool = False        # 是否解禁日
-    history_win_rate: float = 0.0       # 近5日相似形态次日胜率
+    history_win_rate: float = 0.0       # 兼容旧名：近5根日线收阳比例，并非交易胜率
     l3_passed: Optional[bool] = None
 
     # === L4: 评分 ===
@@ -101,13 +101,14 @@ class StockContext:
     llm_confidence: str = ""            # A/B/C
     llm_decision: str = ""              # buy/hold/skip
     llm_reason: str = ""                # 简要理由
-    llm_score: float = 0.0             # LLM 0-100综合评分
+    llm_score: Optional[float] = None  # 历史字段，新运行不再生成LLM评分
+    llm_analysis: dict = field(default_factory=dict)  # 旁路结果及输入证据，不参与决策
     llm_risk_flags: list[str] = field(default_factory=list)   # 风险标记
     llm_key_factors: list[str] = field(default_factory=list)  # 关键因子
-    llm_fallback: bool = False          # 是否降级到规则评分
+    llm_fallback: bool = False          # 旁路是否未评估/失败，不影响正式推荐
 
     # === 数据质量标记 ===
-    data_quality_flags: dict[str, bool] = field(default_factory=lambda: {
+    data_quality_flags: dict = field(default_factory=lambda: {
         'daily_kline': False,           # 日线是否加载成功
         '5min_kline': False,            # 5分钟线是否加载成功
         'fund_flow': False,             # 资金流向是否获取到

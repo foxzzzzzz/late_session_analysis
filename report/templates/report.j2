@@ -14,7 +14,7 @@
 
 ---
 
-{% elif not stats.capital_data_available and not stats.llm_disabled -%}
+{% elif not stats.capital_data_available -%}
 ## ⚠️ 重要提示：资金流向数据不可用
 
 > **资金流向数据完全缺失** — 当日实时及昨日降级数据源均不可达。
@@ -24,22 +24,14 @@
 ---
 
 {% endif -%}
-{% if stats.llm_fallback_count > 0 or stats.llm_disabled -%}
-## ⚠️ LLM分析提示
+## LLM旁路分析说明
 
-{% if stats.llm_disabled -%}
-> **LLM功能已禁用** — 本报告所有推荐**仅基于规则评分引擎**生成，
-> 未经过AI模型综合研判，推荐阈值已自动下调。
-{% else -%}
-> **{{ stats.llm_api_success }}/{{ stats.llm_total }} 只API调用成功**
-> ({{ stats.llm_buy_signals }} 只LLM建议买入)
-> {% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只失败降级为规则评分，阈值已相应调整{% endif %}。
-> 标记为 `[规则]` 的标的**未经过AI模型验证**，信号可靠性降低。
-{% endif -%}
+> 正式评分、排序、推荐等级仅由规则决定。LLM不参与加减分或否决，成功/失败均不调整推荐阈值。
+> {% if stats.llm_disabled %}LLM未启用，旁路未评估。{% else %}规则结果先发布；LLM在后台独立补充，尚未完成不代表已分析为无风险。{% endif %}
+> 公告引用匹配仅代表可追溯，模型的事实/传闻/推断标注和信号冲突解释仍待人工复核。
 
 ---
 
-{% endif -%}
 {% if market_overview["indices"] or market_overview["breadth"]["up"] > 0 -%}
 ## 📊 大盘概况
 
@@ -83,35 +75,22 @@
 ## 📈 最终推荐
 
 {% for stock in strong_buy -%}
-### 🔥 {{ stock.code }} {{ stock.name }} — **强烈买入** ({{ "%.0f"|format(stock.final_score) }}分){% if stock.llm_fallback %} ⚠️[规则]{% endif %}
-
-{% if stock.llm_fallback -%}
-> **注意：此标的LLM分析未生效，以下结论为规则评分引擎生成，请谨慎参考。**
-{% endif -%}
+### 🔥 {{ stock.code }} {{ stock.name }} — **强烈买入** ({{ "%.0f"|format(stock.final_score) }}分)
 
 | 指标 | 数值 | 指标 | 数值 |
 |------|------|------|------|
 | 当前价 | {{ "%.2f"|format(stock.price) }} | 涨跌幅 | {{ "%+.2f%%"|format(stock.change_pct) }} |
-| 尾盘涨幅 | {{ "%+.2f%%"|format(stock.late_price_change) }} | 异动类型 | {{ stock.anomaly_type }} |
-| 尾盘量比 | {{ "%.1f"|format(stock.late_volume_ratio) }}x | 换手率 | {{ "%.1f%%"|format(stock.turnover_rate) }} |
-| 大单流入 | {{ "%.0f"|format(stock.big_order_net/1e4) }}万 | 评分 | A{{"%.0f"|format(stock.score_tail_strength)}} B{{"%.0f"|format(stock.score_technical)}} C{{"%.0f"|format(stock.score_capital)}} D{{"%.0f"|format(stock.score_ma_system)}} E{{"%.0f"|format(stock.score_market_env)}} → {{"%.0f"|format(stock.total_score)}}/100 |
-| LLM决策 | {{ stock.llm_decision }} ({{ stock.llm_confidence }}) | LLM评分 | {{ "%.0f"|format(stock.llm_score) }}/100 |
-| LLM理由 | {{ stock.llm_reason }} | 规则评分 | {{ "%.0f"|format(stock.total_score) }}/100 |
-{% if stock.llm_risk_flags -%}
-| ⚠ 风险 | {{ stock.llm_risk_flags | join(', ') }} |
-{% endif -%}
-{% if stock.llm_key_factors -%}
-| 🔑 因子 | {{ stock.llm_key_factors | join(', ') }} |
-{% endif -%}
-
+| 尾盘涨幅 | {% if stock.data_quality_flags.get('late_metrics_calculated') %}{{ "%+.2f%%"|format(stock.late_price_change) }}{% else %}未获取{% endif %} | 异动类型 | {{ stock.anomaly_type }} |
+| 尾盘量比 | {% if stock.data_quality_flags.get('late_metrics_calculated') %}{{ "%.1f"|format(stock.late_volume_ratio) }}x{% else %}未获取{% endif %} | 换手率 | {{ "%.1f%%"|format(stock.turnover_rate) }} |
+| 大单流入 | {% if stock.data_quality_flags.get('fund_flow') %}{{ "%.0f"|format(stock.big_order_net/1e4) }}万{% else %}未获取{% endif %} | 评分 | A{{"%.0f"|format(stock.score_tail_strength)}} B{{"%.0f"|format(stock.score_technical)}} C{{"%.0f"|format(stock.score_capital)}} D{{"%.0f"|format(stock.score_ma_system)}} E{{"%.0f"|format(stock.score_market_env)}} → {{"%.0f"|format(stock.total_score)}}/100 |
 {% endfor -%}
 {% if buy_stocks -%}
 ### ✅ 建议买入
 
-| 排名 | 代码 | 名称 | 评分 | 尾盘涨幅 | LLM置信度 | 异动类型 | 备注 |
+| 排名 | 代码 | 名称 | 评分 | 尾盘涨幅 | LLM旁路 | 异动类型 | 备注 |
 |------|------|------|------|----------|-----------|----------|------|
 {% for s in buy_stocks -%}
-| {{ s.final_rank }} | {{ s.code }} | {{ s.name }} | {{ "%.0f"|format(s.final_score) }} | {{ "%+.2f%%"|format(s.late_price_change) }} | {{ s.llm_confidence }}{% if s.llm_fallback %}[规则]{% endif %} | {{ s.anomaly_type }} | {% if s.llm_fallback %}⚠{% else %}✓{% endif %} |
+| {{ s.final_rank }} | {{ s.code }} | {{ s.name }} | {{ "%.0f"|format(s.final_score) }} | {{ "%+.2f%%"|format(s.late_price_change) }} | {% if s.llm_analysis.get('fallback', true) %}未评估{% else %}已完成{% endif %} | {{ s.anomaly_type }} | 仅规则推荐 |
 {% endfor -%}
 {% endif -%}
 {% if watch_stocks -%}
@@ -120,10 +99,16 @@
 | 排名 | 代码 | 名称 | 评分 | 尾盘涨幅 | 异动类型 | 备注 |
 |------|------|------|------|----------|----------|------|
 {% for s in watch_stocks -%}
-| {{ s.final_rank }} | {{ s.code }} | {{ s.name }} | {{ "%.0f"|format(s.final_score) }} | {{ "%+.2f%%"|format(s.late_price_change) }} | {{ s.anomaly_type }} | {% if s.llm_fallback %}⚠{% else %}—{% endif %} |
+| {{ s.final_rank }} | {{ s.code }} | {{ s.name }} | {{ "%.0f"|format(s.final_score) }} | {{ "%+.2f%%"|format(s.late_price_change) }} | {{ s.anomaly_type }} | 仅规则推荐 |
 {% endfor -%}
 {% endif -%}
 ---
+
+## 公告证据与旁路研究（含未入选标的）
+
+{% for stock in analysis_stocks %}
+{% include 'llm_analysis.j2' %}
+{% endfor %}
 
 ## 📊 运行统计
 
@@ -137,11 +122,7 @@
 
 **总耗时**: {{ "%.1f"|format(stats.elapsed) }}秒
 
-{% if stats.llm_disabled -%}
-**LLM分析**: 未启用 (纯规则评分模式)
-{% else -%}
-**LLM分析**: {{ stats.llm_api_success }}/{{ stats.llm_total }} API调用成功，{{ stats.llm_buy_signals }} 只建议买入{% if stats.llm_fallback_count > 0 %}，{{ stats.llm_fallback_count }} 只失败降级{% endif %}{% if not stats.capital_data_available %} | 资金面权重已调整{% endif %}
-{% endif -%}
+**LLM旁路**: {% if stats.llm_disabled %}未启用/未评估{% else %}后台独立补充，完成后另存旁路报告{% endif %}；不参与正式推荐。
 
 **资金流向**: {% if stats.capital_data_date == 'today' %}今日实时数据{% elif stats.capital_data_date == 'yesterday' %}⚠️ 昨日降级数据{% else %}不可用{% endif %}
 

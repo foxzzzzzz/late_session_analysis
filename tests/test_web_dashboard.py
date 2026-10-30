@@ -377,6 +377,13 @@ def test_scheduler_retries_failed_run_and_persists_logs(tmp_path, monkeypatch):
     from web.models import db, PipelineRun, PipelineLog
     from web.scheduler import _execute_scheduled_pipeline
 
+    class TradingDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 30)
+
+    monkeypatch.setattr('web.scheduler.date', TradingDate)
+
     app = make_web_app(tmp_path, monkeypatch)
 
     class FakeService:
@@ -395,7 +402,7 @@ def test_scheduler_retries_failed_run_and_persists_logs(tmp_path, monkeypatch):
     monkeypatch.setattr("web.services.pipeline_service.save_pipeline_results", fake_save)
 
     with app.app_context():
-        failed = PipelineRun(trading_date=date.today(), status="failed", started_at=datetime.now())
+        failed = PipelineRun(trading_date=TradingDate.today(), status="failed", started_at=datetime.now())
         db.session.add(failed)
         db.session.commit()
         run_id = failed.id

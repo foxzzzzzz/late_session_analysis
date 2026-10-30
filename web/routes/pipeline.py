@@ -6,7 +6,7 @@ import queue
 import threading
 from datetime import datetime, date
 from flask import Blueprint, render_template, request, Response, jsonify, current_app
-from web.models import db, PipelineRun, PipelineLog, DailyRecommendation, SimulatedTrade
+from web.models import db, PipelineRun, PipelineLog
 
 bp = Blueprint("pipeline", __name__)
 
@@ -86,7 +86,7 @@ def _run_pipeline_in_thread(app, run_id: int, test_mode: bool = True):
     _safe_log(app, run_id, "SYS", "INFO", "Thread started, entering app context...")
 
     try:
-        from web.services.pipeline_service import PipelineService, save_pipeline_results
+        from web.services.pipeline_service import PipelineService, save_pipeline_results, finish_pipeline_run
 
         def on_log(stage: str, level: str, message: str):
             _log_handler(run_id, stage, level, message)
@@ -99,29 +99,17 @@ def _run_pipeline_in_thread(app, run_id: int, test_mode: bool = True):
                 results = service.run(test_mode=test_mode)
                 if results.get("error"):
                     _log_handler(run_id, "SYS", "ERROR", str(results["error"]))
-                    run = db.session.get(PipelineRun, run_id)
-                    if run:
-                        run.status = "failed"
-                        run.finished_at = datetime.now()
-                        db.session.commit()
+                    finish_pipeline_run(run_id, 'failed', results, service)
                     return
                 save_pipeline_results(run_id, results)
 
-                run = db.session.get(PipelineRun, run_id)
-                if run:
-                    run.status = "completed"
-                    run.finished_at = datetime.now()
-                    db.session.commit()
+                finish_pipeline_run(run_id, 'completed', results, service)
 
             except Exception as e:
                 _log_handler(run_id, "SYS", "ERROR", f"Pipeline crashed: {e}")
                 _log_handler(run_id, "SYS", "ERROR", _tb.format_exc()[-500:])
                 try:
-                    run = db.session.get(PipelineRun, run_id)
-                    if run:
-                        run.status = "failed"
-                        run.finished_at = datetime.now()
-                        db.session.commit()
+                    finish_pipeline_run(run_id, 'failed', locals().get('results', {}), service)
                 except Exception:
                     pass
 
@@ -130,11 +118,8 @@ def _run_pipeline_in_thread(app, run_id: int, test_mode: bool = True):
         _safe_log(app, run_id, "SYS", "ERROR", _tb.format_exc()[-500:])
         try:
             with app.app_context():
-                run = db.session.get(PipelineRun, run_id)
-                if run:
-                    run.status = "failed"
-                    run.finished_at = datetime.now()
-                    db.session.commit()
+                from web.services.pipeline_service import finish_pipeline_run
+                finish_pipeline_run(run_id, 'failed', locals().get('results', {}), locals().get('service'))
         except Exception:
             pass
 
@@ -193,16 +178,9 @@ def run_pipeline():
     if existing and existing.status == "completed" and not force:
         return jsonify({"status": "error", "message": f"Pipeline already ran today ({today}). Use force=true to re-run."}), 409
     if existing:
-        old_recs = DailyRecommendation.query.filter_by(run_id=existing.id).all()
-        old_rec_ids = [rec.id for rec in old_recs]
-        if old_rec_ids:
-            SimulatedTrade.query.filter(SimulatedTrade.recommendation_id.in_(old_rec_ids)).delete(synchronize_session=False)
-        DailyRecommendation.query.filter_by(run_id=existing.id).delete(synchronize_session=False)
-        PipelineLog.query.filter_by(run_id=existing.id).delete(synchronize_session=False)
-        existing.status = "running"
-        existing.started_at = datetime.now()
-        existing.finished_at = None
-        existing.stages_json = None
+        from web.services.pipeline_service import restart_pipeline_run
+        if not restart_pipeline_run(existing):
+            return jsonify({'status': 'error', 'message': 'Pipeline generation changed; retry later'}), 409
         run = existing
     else:
         run = PipelineRun(
@@ -255,7 +233,7 @@ def stream(run_id: int):
 def _stream_and_run(app, run_id: int, q: queue.Queue, run: PipelineRun):
     """Run pipeline in a thread, stream SSE with heartbeat polling."""
     import traceback as _tb
-    from web.services.pipeline_service import PipelineService, save_pipeline_results
+    from web.services.pipeline_service import PipelineService, save_pipeline_results, finish_pipeline_run
 
     yield "event: connected\ndata: {}\n\n"
 
@@ -274,7 +252,7 @@ def _stream_and_run(app, run_id: int, q: queue.Queue, run: PipelineRun):
 
     def _run():
         with app.app_context():
-            from web.models import db as _db, PipelineLog as _PL, PipelineRun as _PR
+            from web.models import db as _db, PipelineLog as _PL
 
             def _emit(stage: str, level: str, message: str):
                 msg = str(message)[:2000]
@@ -296,20 +274,12 @@ def _stream_and_run(app, run_id: int, q: queue.Queue, run: PipelineRun):
                 if results.get('error'):
                     raise RuntimeError(str(results['error']))
                 save_pipeline_results(run_id, results)
-                run_obj = _db.session.get(_PR, run_id)
-                if run_obj:
-                    run_obj.status = "completed"
-                    run_obj.finished_at = datetime.now()
-                    _db.session.commit()
+                finish_pipeline_run(run_id, 'completed', results, service)
             except Exception as e:
                 _emit("SYS", "ERROR", f"Pipeline failed: {e}")
                 _emit("SYS", "ERROR", _tb.format_exc()[-800:])
                 try:
-                    run_obj = _db.session.get(_PR, run_id)
-                    if run_obj:
-                        run_obj.status = "failed"
-                        run_obj.finished_at = datetime.now()
-                        _db.session.commit()
+                    finish_pipeline_run(run_id, 'failed', locals().get('results', {}), locals().get('service'))
                 except Exception:
                     pass
             finally:
@@ -428,18 +398,23 @@ def run_detail(run_id: int):
 @bp.route('/status/<int:run_id>')
 def run_status(run_id: int):
     """分页增量日志及已完成阶段；定时/手动执行均读同一数据库。"""
+    from web.services.pipeline_service import sidecar_payload
     after = request.args.get('after', '0')
     if not after.isdigit():
         return jsonify(error='invalid cursor'), 400
     run = db.session.get(PipelineRun, run_id)
     if run is None:
         return jsonify(error='not found'), 404
+    generation = run.started_at.isoformat()
+    if request.args.get('generation') not in (None, generation):
+        after = '0'  # 同日重跑可能重用日志ID，旧游标不能跳过新批次日志。
     limit = int(os.getenv('WEB_PIPELINE_LOG_PAGE_SIZE', '200'))
     logs = (PipelineLog.query.filter(PipelineLog.run_id == run_id, PipelineLog.id > int(after))
             .order_by(PipelineLog.id).limit(limit).all())
     last = PipelineLog.query.filter_by(run_id=run_id).order_by(PipelineLog.id.desc()).first()
     response = jsonify(
         id=run.id, status=run.status, regime=run.regime,
+        run_generation=generation,
         stages=json.loads(run.stages_json or '{}'),
         finished_at=run.finished_at.strftime('%H:%M:%S') if run.finished_at else None,
         total_logs=PipelineLog.query.filter_by(run_id=run_id).count(),
@@ -447,6 +422,7 @@ def run_status(run_id: int):
         cursor=logs[-1].id if logs else int(after),
         logs=[dict(id=log.id, stage=log.stage, level=log.level, message=log.message,
                    timestamp=log.timestamp.strftime('%H:%M:%S')) for log in logs],
+        sidecar=sidecar_payload(run),
     )
     response.headers['Cache-Control'] = 'no-store'
     return response

@@ -5,7 +5,7 @@
   S1 14:30-14:50 初始扫描 (每3分钟,候选池,L1+K线)
   S2 14:50-14:55 加速监控 (每1分钟,候选池,L2+资金流向)
   S3 14:55       L3静态验证 (单次, 均线/波动率/利空/解禁)
-  S4 14:55-14:58 L4多轮评分 (每10秒刷新分时, L4评分+LLM融合)
+  S4 14:55-14:58 L4多轮评分 (每10秒刷新分时, 纯规则推荐+LLM旁路研究)
 """
 import time
 import logging
@@ -130,8 +130,14 @@ class LateSessionPipeline:
                 max_tokens=config.llm_max_tokens,
                 temperature=config.llm_temperature,
                 timeout=config.llm_timeout,
+                thinking_enabled=config.llm_thinking_enabled,
+                max_retries=config.llm_max_retries,
             )
-            self.llm_runner = ParallelLLMRunner(self.llm_client, max_workers=4)
+            self.llm_runner = ParallelLLMRunner(
+                self.llm_client, max_workers=config.llm_max_workers,
+                evidence_loader=self._load_llm_evidence, batch_timeout=config.llm_batch_timeout)
+        self.on_rules_ready = None
+        self.sidecar_thread = None
 
     def _init_fetchers(self) -> DataFetcherManager:
         fetchers = []
@@ -280,6 +286,8 @@ class LateSessionPipeline:
             if 4 in stages:
                 top30 = self._run_stage4(l3_passed)
                 self.top30 = top30  # expose for web dashboard
+                if callable(self.on_rules_ready):
+                    self.on_rules_ready(top30)
 
             self.tracker.finish()
 
@@ -287,7 +295,10 @@ class LateSessionPipeline:
             self.market_overview = self._fetch_market_overview()
 
             # 生成报告
-            return self._generate_report(top30)
+            path = self._generate_report(top30)
+            if not callable(self.on_rules_ready):
+                self.start_sidecar()
+            return path
 
         except Exception as e:
             logger.error(f"流水线异常: {e}", exc_info=True)
@@ -487,6 +498,7 @@ class LateSessionPipeline:
             # === 写入板块涨跌幅 ===
             if ctx.sector and self.preloader:
                 ctx.sector_performance = self.preloader.get_sector_performance(ctx.sector)
+                ctx.data_quality_flags['sector_performance'] = ctx.sector in self.preloader.sector_performance
 
             # === 从日线计算: 连续涨停天数 ===
             if dm and ctx.code in self._daily_cache:
@@ -515,6 +527,7 @@ class LateSessionPipeline:
                         if float(row.get('close', 0)) > float(row.get('open', 0))
                     )
                     ctx.history_win_rate = wins / len(recent) * 100
+                    ctx.data_quality_flags['history_sample_count'] = len(recent)
 
             # === 接近关键价位 (整数关口/均线) ===
             if ctx.price > 0:
@@ -542,6 +555,7 @@ class LateSessionPipeline:
                             i for i, v in enumerate(ranked) if v == my_pct
                         ) + 1
                         ctx.sector_rank_pct = rank / len(ranked) * 100
+                        ctx.data_quality_flags['sector_rank'] = True
                     except StopIteration:
                         pass
 
@@ -556,6 +570,12 @@ class LateSessionPipeline:
                     )
                     ctx.active_buy_ratio = fd.get("active_buy_ratio", 50.0)
                     ctx.data_quality_flags['fund_flow'] = True
+                    ctx.data_quality_flags.update(
+                        fund_flow_source='s2_cache',
+                        fund_flow_sources_seen=fd.get('sources_seen', []),
+                        fund_flow_data_date=fd.get('data_date', ''),
+                        fund_flow_fetched_at=fd.get('fetched_at', ''),
+                        fund_flow_is_realtime=fd.get('is_realtime', False))
 
     def _enrich_bad_news(self, contexts: list[StockContext]):
         """S3阶段: 利空公告排查 (东方财富公告API)
@@ -1113,6 +1133,8 @@ class LateSessionPipeline:
             ctx.data_quality_flags['fund_flow'] = True
             ctx.data_quality_flags['fund_flow_source'] = 's2_cache'
             ctx.data_quality_flags['fund_flow_data_date'] = fd.get("data_date", "")
+            ctx.data_quality_flags['fund_flow_fetched_at'] = fd.get('fetched_at', '')
+            ctx.data_quality_flags['fund_flow_sources_seen'] = fd.get('sources_seen', [])
             ctx.data_quality_flags['fund_flow_is_realtime'] = (
                 fd.get("data_date", "") == today_str
             )
@@ -1203,7 +1225,7 @@ class LateSessionPipeline:
     # ============================================================
 
     def _run_stage4(self, l3_passed: list[StockContext]) -> list[StockContext]:
-        """S4: L4多轮评分 (刷新分时价格+5min指标) + 末轮LLM分析 + 融合排序"""
+        """S4: L4多轮评分 (刷新分时价格+5min指标) + 纯规则排序 + 公告旁路分析"""
         self.tracker.stage_start("S4_评分冲刺", len(l3_passed))
 
         loop_interval = 10  # 每10秒刷新L4评分
@@ -1266,71 +1288,95 @@ class LateSessionPipeline:
         top30 = self.funnel.get_top(scored, 30)
         logger.info(f"S4 最终L4评分 top30: {len(top30)} 只")
 
-        # LLM并行分析 (单次, 在最后评分上执行)
-        llm_results = {}
-        if self.llm_runner:
-            self.tracker.llm_total = len(top30)
-            llm_results = self.llm_runner.analyze_batch(top30)
-            self.tracker.llm_success = sum(
-                1 for r in llm_results.values()
-                if not r.get('fallback', False)
-            )
-            self.tracker.llm_buy_signals = sum(
-                1 for r in llm_results.values()
-                if r.get('decision') == 'buy'
-            )
-
-            # 对失败的标的重试一次LLM分析
-            failed_codes = [code for code, r in llm_results.items() if r.get('fallback', False)]
-            if failed_codes:
-                failed_ctxs = [ctx for ctx in top30 if ctx.code in failed_codes]
-                logger.info(f"LLM重试: {len(failed_ctxs)} 只失败标的 ({', '.join(failed_codes)})")
-                retry_results = self.llm_runner.analyze_batch(failed_ctxs)
-                llm_results.update(retry_results)
-                self.tracker.llm_success = sum(
-                    1 for r in llm_results.values()
-                    if not r.get('fallback', False)
-                )
-                self.tracker.llm_buy_signals = sum(
-                    1 for r in llm_results.values()
-                    if r.get('decision') == 'buy'
-                )
-
-            self._llm_results = llm_results
-
-        capital_ok = (self.capital_data_date == 'today')
-        llm_ok = (self.llm_runner is not None
-                  and any(not r.get('fallback', False) for r in llm_results.values()))
-
-        rule_cfg = getattr(self.funnel.config, 'rule_scorer', None)
-
-        # 推荐阈值: 从config读取regime感知基准值, 按数据缺失场景打折
-        base_sb = self.config._regime_value("l4_high_threshold", self.regime)
-        base_buy = self.config._regime_value("l4_buy_threshold", self.regime)
-        base_watch = self.config._regime_value("l4_medium_threshold", self.regime)
-
-        if capital_ok and llm_ok:
-            offset = 0
-        elif capital_ok and not llm_ok:
-            offset = -7
-        elif not capital_ok and llm_ok:
-            offset = -10
-        else:
-            offset = -17
-
-        logger.info(
-            f"S4 推荐阈值 (regime={self.regime}): "
-            f"strong_buy≥{base_sb + offset:.0f} buy≥{base_buy + offset:.0f} watch≥{base_watch + offset:.0f}"
-        )
-
-        top30 = merge_and_rank(top30, llm_results,
-            strong_buy_threshold=base_sb + offset,
-            buy_threshold=base_buy + offset,
-            watch_threshold=base_watch + offset,
-            rule_scorer_cfg=rule_cfg)
+        # 先确定正式结果。旁路异常不改变分数、排名、阈值和等级。
+        thresholds = self._recommendation_thresholds()
+        top30 = merge_and_rank(top30, {},
+            strong_buy_threshold=thresholds[0], buy_threshold=thresholds[1],
+            watch_threshold=thresholds[2])
+        # 固定规则快照与分析时点。此处不获取公告、不等待模型。
+        self.tracker.llm_total = len(top30) if self.llm_runner else 0
+        from copy import deepcopy
+        from zoneinfo import ZoneInfo
+        as_of = datetime.now(ZoneInfo('Asia/Shanghai')).replace(tzinfo=None).isoformat(timespec='seconds')
+        for ctx in top30:
+            if self.llm_runner:
+                ctx.llm_analysis = {'status': 'pending', 'fallback': True, 'summary': '后台待分析',
+                                    'as_of': as_of, 'events': [], 'conflicts': [], 'unknowns': []}
+        self._sidecar_contexts = deepcopy(top30)
 
         self.tracker.stage_end("S4_评分冲刺", len(top30))
         return top30
+
+    def _recommendation_thresholds(self) -> tuple[float, float, float]:
+        """推荐阈值只沿用市场状态及资金缺失调整，与LLM成败无关。"""
+        offset = (0 if self.capital_data_date == 'today'
+                  else self.config.capital_missing_threshold_offset)
+        values = tuple(self.config._regime_value(key, self.regime) + offset
+                       for key in ('l4_high_threshold', 'l4_buy_threshold', 'l4_medium_threshold'))
+        logger.info(f"S4 推荐阈值 (regime={self.regime}, 仅规则): "
+                    f"strong_buy≥{values[0]:.0f} buy≥{values[1]:.0f} watch≥{values[2]:.0f}")
+        return values
+
+    def _load_llm_evidence(self, ctx: StockContext) -> dict:
+        return self.news_fetcher.collect_evidence(
+            ctx.code, datetime.fromisoformat(ctx.llm_analysis['as_of']),
+            max_items=self.config.llm_evidence_max_items,
+            max_chars=self.config.llm_evidence_max_chars,
+            timeout=self.config.llm_evidence_timeout,
+            lookback_days=self.config.llm_evidence_lookback_days,
+            deadline=ctx.llm_analysis.get('_deadline'))
+
+    def start_sidecar(self, on_complete=None):
+        """正式结果发布后启动一次后台补充；只操作冻结副本，不再融合排序。"""
+        if not self.llm_runner or getattr(self, 'sidecar_thread', None) is not None:
+            return getattr(self, 'sidecar_thread', None)
+        import threading
+        from copy import deepcopy
+        from pathlib import Path
+        from analysis.parallel_runner import _fallback_result
+        contexts = deepcopy(getattr(self, '_sidecar_contexts', getattr(self, 'top30', [])))
+        base = getattr(self, '_sidecar_base_path', None)
+        if base is None:
+            from uuid import uuid4
+            base = str(Path(self.config.report_output_dir) / f"sidecar_{datetime.now():%Y%m%d_%H%M%S_%f}_{uuid4().hex}.md")
+        self._sidecar_base_path = base
+
+        def work():
+            try:
+                results = self.llm_runner.analyze_batch(contexts, deadline=getattr(self, '_sidecar_deadline', None))
+            except Exception as e:
+                logger.warning(f'旁路整批异常，正式结果不变: {type(e).__name__}')
+                results = {c.code: _fallback_result('旁路整批异常') for c in contexts}
+            for ctx in contexts:
+                ctx.llm_analysis = {**ctx.llm_analysis, **results.get(ctx.code, _fallback_result('旁路无结果'))}
+                ctx.llm_fallback = ctx.llm_analysis.get('fallback', True)
+            # 先提交旁路终态，不能让本地文件IO推迟Web可见的结果。
+            if on_complete is not None:
+                try:
+                    on_complete({c.code: c.llm_analysis for c in contexts})
+                except Exception as e:
+                    logger.warning(f'旁路补充回调失败: {type(e).__name__}')
+            try:
+                import json
+                from report.renderer import get_jinja_env
+                template = get_jinja_env().get_template('llm_analysis.j2')
+                md = '# LLM旁路补充（不改变正式推荐）\n\n' + '\n\n'.join(
+                    template.render(stock=c) for c in contexts)
+                artifacts = {Path(base).with_suffix('.llm.md'): md,
+                             Path(base).with_suffix('.llm.json'): json.dumps(
+                                 [self._json_safe(asdict(c)) for c in contexts], ensure_ascii=False,
+                                 indent=2, allow_nan=False)}
+                for path, content in artifacts.items():
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = path.with_suffix(path.suffix + '.tmp')
+                    temporary.write_text(content, encoding='utf-8')
+                    temporary.replace(path)
+            except Exception as e:
+                logger.warning(f'旁路补充文件保存失败: {type(e).__name__}')
+
+        self.sidecar_thread = threading.Thread(target=work, name='llm-sidecar', daemon=True)
+        self.sidecar_thread.start()
+        return self.sidecar_thread
 
     # ============================================================
     # 大盘概况
@@ -1448,9 +1494,8 @@ class LateSessionPipeline:
             'llm_api_success': self.tracker.llm_success,
             'llm_total': self.tracker.llm_total,
             'llm_fallback_count': llm_fallback_count,
-            'llm_buy_signals': getattr(self.tracker, 'llm_buy_signals', 0),
             'llm_disabled': self.llm_client is None,
-            'capital_data_available': any(c.big_order_net != 0 for c in top30),
+            'capital_data_available': any(c.data_quality_flags.get('fund_flow', False) for c in top30),
             'capital_data_date': self.capital_data_date,
             'northbound_available': nb_data.get("available", False),
             'northbound_today_net': nb_data.get("today_net_yi", 0),
@@ -1474,9 +1519,29 @@ class LateSessionPipeline:
             stats=stats,
             data_source=self.fetcher_mgr.get_active_name(),
             market_overview=getattr(self, 'market_overview', None),
+            analysis_stocks=top30,
         )
 
         path = save_report(md, self.config.report_output_dir)
+        if not getattr(self, '_sidecar_base_path', None):
+            self._sidecar_base_path = path
+        if getattr(self, 'llm_runner', None):
+            from pathlib import Path
+            supplement = Path(self._sidecar_base_path).with_suffix('.llm.md').name
+            audit = Path(self._sidecar_base_path).with_suffix('.llm.json').name
+            with Path(path).open('a', encoding='utf-8') as report_file:
+                report_file.write(f"\n\nLLM后台补充：[查看研究]({supplement}) | [旁路审计]({audit})。正式推荐不等待旁路。\n")
+        # 保存全部候选（包括skip）的输入、证据、原始响应及规则结果，供旁路验证。
+        from pathlib import Path
+        import json
+        sidecar_path = Path(path).with_suffix('.llm.json')
+        try:
+            sidecar_path.write_text(json.dumps(
+                [self._json_safe(asdict(c)) for c in top30],
+                ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
+            logger.info(f'LLM旁路审计记录已保存: {sidecar_path}')
+        except (OSError, ValueError) as e:
+            logger.warning(f'LLM旁路审计保存失败: {type(e).__name__}')
 
         if self.config.enable_md_to_image:
             img_path = md_to_image(md, self.config.report_output_dir)

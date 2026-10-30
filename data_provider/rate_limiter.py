@@ -50,7 +50,58 @@ def _get_em_session() -> requests.Session:
     return _em_session
 
 
-def em_get(url: str, timeout: float = 15, **kwargs) -> requests.Response:
+def _isolated_get(sender, url, timeout, deadline, kwargs):
+    """仅子进程执行网络IO；不继承主进程Session、锁或数据库连接。"""
+    try:
+        with requests.Session() as session:
+            session.headers.update({'User-Agent': _DEFAULT_UA})
+            remaining = min(timeout, deadline-time.monotonic())
+            if remaining <= 0:
+                raise requests.Timeout('sidecar deadline before child HTTP request')
+            response = session.get(url, timeout=remaining, **kwargs)
+            sender.send((True, response))
+    except requests.RequestException as exc:
+        sender.send((False, isinstance(exc, requests.Timeout), str(exc)))
+    finally:
+        sender.close()
+
+
+def _deadline_get(url, timeout, deadline, **kwargs):
+    """requests读取超时不是总时限；用独立进程保证截止后关闭在途socket。"""
+    import multiprocessing
+    ctx = multiprocessing.get_context('spawn')
+    receiver, sender = ctx.Pipe(duplex=False)
+    process = ctx.Process(target=_isolated_get, args=(sender, url, timeout, deadline, kwargs), daemon=True)
+    started = False
+    try:
+        if deadline <= time.monotonic():
+            raise requests.Timeout('sidecar deadline before HTTP process')
+        process.start()
+        started = True
+        sender.close()
+        if not receiver.poll(max(0, deadline-time.monotonic())):
+            raise requests.Timeout('sidecar deadline during HTTP request')
+        try:
+            message = receiver.recv()
+        except EOFError as exc:
+            raise requests.RequestException('sidecar HTTP process exited without response') from exc
+        if deadline <= time.monotonic():
+            raise requests.Timeout('sidecar deadline after HTTP response')
+        if not message[0]:
+            error = requests.Timeout if message[1] else requests.RequestException
+            raise error(message[2])
+        return message[1]
+    finally:
+        sender.close()
+        if started:
+            if process.is_alive():
+                process.terminate()
+            process.join()
+        receiver.close()
+        process.close()
+
+
+def em_get(url: str, timeout: float = 15, deadline: float = None, **kwargs) -> requests.Response:
     """东财统一 GET 请求 — 串行化门控
 
     所有 eastmoney.com 的 requests 调用统一走此入口。
@@ -68,21 +119,34 @@ def em_get(url: str, timeout: float = 15, **kwargs) -> requests.Response:
         requests.RequestException: 网络错误直接抛出，由调用方处理
     """
     global _last_em_call
-    with _lock:
+    if deadline is None:
+        _lock.acquire()
+    elif not _lock.acquire(timeout=max(0, deadline-time.monotonic())):
+        raise requests.Timeout('sidecar deadline while waiting for HTTP gate')
+    try:
+        if deadline is not None and deadline <= time.monotonic():
+            raise requests.Timeout('sidecar deadline before HTTP request')
         elapsed = time.time() - _last_em_call
         if elapsed < EM_MIN_INTERVAL and _last_em_call > 0:
             wait = EM_MIN_INTERVAL - elapsed + random.uniform(0.1, 0.5)
+            if deadline is not None and wait >= deadline-time.monotonic():
+                raise requests.Timeout('sidecar deadline before rate-limit slot')
             time.sleep(wait)
         try:
-            resp = _get_em_session().get(
-                url, timeout=timeout,
-                **kwargs,
-            )
+            remaining = min(timeout, deadline-time.monotonic()) if deadline is not None else timeout
+            if remaining <= 0:
+                raise requests.Timeout('sidecar deadline before HTTP request')
+            if deadline is not None:
+                resp = _deadline_get(url, remaining, deadline, **kwargs)
+            else:
+                resp = _get_em_session().get(url, timeout=remaining, **kwargs)
             _last_em_call = time.time()
             return resp
         except requests.RequestException:
             _last_em_call = time.time()
             raise
+    finally:
+        _lock.release()
 
 
 def em_urlopen(

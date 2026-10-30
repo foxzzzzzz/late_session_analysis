@@ -21,6 +21,7 @@ def render_report(
     stats: dict,
     data_source: str = "",
     market_overview: dict = None,
+    analysis_stocks: list = None,
 ) -> str:
     """渲染主报告为Markdown"""
     env = get_jinja_env()
@@ -36,6 +37,7 @@ def render_report(
         watch_stocks=watch_stocks,
         stats=stats,
         market_overview=market_overview or {},
+        analysis_stocks=analysis_stocks if analysis_stocks is not None else strong_buy + buy_stocks + watch_stocks,
     )
 
 
@@ -51,7 +53,7 @@ def save_report(markdown: str, output_dir: str = "./reports") -> str:
     path = Path(output_dir)
     path.mkdir(parents=True, exist_ok=True)
     now = datetime.now()
-    filename = f"tail_analysis_{now.strftime('%Y%m%d_%H%M%S')}.md"
+    filename = f"tail_analysis_{now.strftime('%Y%m%d_%H%M%S_%f')}.md"
     filepath = path / filename
     filepath.write_text(markdown, encoding="utf-8")
     logger.info(f"报告已保存: {filepath}")

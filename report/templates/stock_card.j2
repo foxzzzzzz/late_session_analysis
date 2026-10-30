@@ -8,21 +8,14 @@
 | 📈 行情 | 成交额 | {{ "%.2f"|format(stock.turnover/1e8) }}亿 |
 | 📈 行情 | 换手率 | {{ "%.1f%%"|format(stock.turnover_rate) }} |
 | 🔍 异动 | 类型 | {{ stock.anomaly_type }} |
-| 🔍 异动 | 尾盘涨幅 | {{ "%+.2f%%"|format(stock.late_price_change) }} |
-| 🔍 异动 | 尾盘量比 | {{ "%.1f"|format(stock.late_volume_ratio) }}x |
-| 💰 资金 | 大单净流入 | {{ "%.0f"|format(stock.big_order_net/1e4) }}万 |
-| 💰 资金 | 大单占比 | {{ "%.1f%%"|format(stock.big_order_ratio*100) }} |
-| 💰 资金 | 主动买入 | {{ "%.1f%%"|format(stock.active_buy_ratio) }} |
-| 📊 技术 | 均线状态 | {{ stock.ma_alignment }} |
-| 📊 技术 | 20日位置 | {{ "%.0f%%"|format(stock.position_20d) }} |
-| 🏢 板块 | {{ stock.sector }} | {{ "%+.2f%%"|format(stock.sector_performance) }} |
-| 🤖 LLM | 决策 | {{ stock.llm_decision }} ({{ stock.llm_confidence }}) |
-| 🤖 LLM | 评分 | {{ "%.0f"|format(stock.llm_score) }}/100 |
-| 🤖 LLM | 理由 | {{ stock.llm_reason }} |
-{% if stock.llm_risk_flags -%}
-| 🤖 LLM | 风险 | {{ stock.llm_risk_flags | join(', ') }} |
-{% endif -%}
-{% if stock.llm_key_factors -%}
-| 🤖 LLM | 因子 | {{ stock.llm_key_factors | join(', ') }} |
-{% endif -%}
+| 🔍 异动 | 尾盘涨幅 | {% if stock.data_quality_flags.get('late_metrics_calculated') %}{{ "%+.2f%%"|format(stock.late_price_change) }}{% else %}未获取{% endif %} |
+| 🔍 异动 | 尾盘量比 | {% if stock.data_quality_flags.get('late_metrics_calculated') %}{{ "%.1f"|format(stock.late_volume_ratio) }}x{% else %}未获取{% endif %} |
+| 💰 资金 | 大单净流入 | {% if stock.data_quality_flags.get('fund_flow') %}{{ "%.0f"|format(stock.big_order_net/1e4) }}万{% else %}未获取{% endif %} |
+| 💰 资金 | 大单占比 | {% if stock.data_quality_flags.get('fund_flow') %}{{ "%.1f%%"|format(stock.big_order_ratio*100) }}{% else %}未获取{% endif %} |
+| 💰 资金 | 主动买入 | {% if stock.data_quality_flags.get('fund_flow') %}{{ "%.1f%%"|format(stock.active_buy_ratio) }}{% else %}未获取{% endif %} |
+| 📊 技术 | 均线状态 | {% if stock.data_quality_flags.get('ma_calculated') %}{{ stock.ma_alignment }}{% else %}未获取{% endif %} |
+| 📊 技术 | 20日位置 | {% if stock.data_quality_flags.get('daily_kline') %}{{ "%.0f%%"|format(stock.position_20d) }}{% else %}未获取{% endif %} |
+| 🏢 板块 | {{ stock.sector }} | {% if stock.data_quality_flags.get('sector_performance') %}{{ "%+.2f%%"|format(stock.sector_performance) }}{% else %}未获取{% endif %} |
 | 🎯 评分 | 综合 | {{ "%.0f"|format(stock.final_score) }}/100 |
+
+{% include 'llm_analysis.j2' %}

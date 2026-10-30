@@ -58,6 +58,23 @@ def pipeline():
 # 日线指标
 # ================================================================
 
+
+def test_rebuilt_context_preserves_cached_fund_flow_provenance(pipeline):
+    from datetime import datetime
+    today = datetime.now().strftime('%Y-%m-%d')
+    pipeline._fund_flow_data = {'000001': {
+        'mainForce': 300, 'active_buy_ratio': 60, 'data_date': today,
+        'sources_seen': ['minute', 'sina'], 'fetched_at': today + 'T14:50:00',
+        'is_realtime': True}}
+    ctx = make_ctx()
+    pipeline._enrich_contexts([ctx])
+    q = ctx.data_quality_flags
+    assert q['fund_flow_source'] == 's2_cache'
+    assert q['fund_flow_data_date'] == today
+    assert q['fund_flow_fetched_at'] == today + 'T14:50:00'
+    assert q['fund_flow_sources_seen'] == ['minute', 'sina']
+    assert q['fund_flow_is_realtime'] is True
+
 class TestDailyMetrics:
     def test_ma_and_volatility_applied(self, pipeline):
         """日线 MA/波动率/yang_days 正确写入 context"""
