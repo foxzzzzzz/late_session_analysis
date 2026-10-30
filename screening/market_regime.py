@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+from data_provider.http_kline import fetch_index_daily as _fetch_http_index
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ def _save_regime(state: dict):
 
 def _fetch_sh_index() -> Optional[pd.DataFrame]:
     """使用共享服务器池拉取上证指数日线；指数接口使用000001。"""
+    bars = int(os.getenv("MARKET_INDEX_BARS", "50"))
     try:
         from mootdx.quotes import Quotes
         from data_provider.tdx_server_pool import get_default_pool
@@ -57,10 +59,10 @@ def _fetch_sh_index() -> Optional[pd.DataFrame]:
         servers = get_default_pool().get_servers()[:max_servers]
     except ImportError:
         logger.warning("mootdx 未安装, 无法获取上证指数")
-        return None
+        return _fetch_http_index(bars)
     except Exception as e:
         logger.warning(f"上证指数服务器池初始化失败: {e}")
-        return None
+        return _fetch_http_index(bars)
 
     for addr, port in servers:
         client = None
@@ -92,8 +94,8 @@ def _fetch_sh_index() -> Optional[pd.DataFrame]:
                     logger.debug(f"上证指数连接关闭失败: {e}")
 
     # 指数接口失败不等于个股接口失败，不将服务器移出共享池。
-    logger.warning(f"上证指数获取全部失败 (尝试{len(servers)}台), 将回退中性阈值")
-    return None
+    logger.warning(f"上证指数TDX获取全部失败 (尝试{len(servers)}台), 尝试HTTP备用源")
+    return _fetch_http_index(bars)
 
 
 def determine_regime(

@@ -23,6 +23,7 @@ def index_source(monkeypatch):
     monkeypatch.setenv("MARKET_INDEX_BARS", "50")
     monkeypatch.setenv("MARKET_INDEX_TIMEOUT", "5")
     monkeypatch.setenv("MARKET_INDEX_MAX_SERVERS", "3")
+    monkeypatch.setattr(market_regime, '_fetch_http_index', Mock(return_value=None))
     return pool, factory
 
 
@@ -41,6 +42,7 @@ def test_fetch_index_uses_index_endpoint_and_pool(index_source, caplog):
                                     timeout=5.0, auto_retry=False, raise_exception=True)
     client.index.assert_called_once_with(symbol="000001", frequency=9, offset=50)
     client.bars.assert_not_called()  # 不能误取深市000001个股
+    market_regime._fetch_http_index.assert_not_called()
     client.close.assert_called_once()
     assert "first:7709" in caplog.text
     pool.mark_failed.assert_not_called()

@@ -77,7 +77,7 @@ class KlineProvider:
             idx = (self._server_index + offset) % len(servers)
             addr, port = servers[idx]
             try:
-                c = Quotes.factory(market=self._market, server=(addr, port))
+                c = Quotes.factory(market=self._market, server=(addr, port), multithread=True)
                 # 验证这台真能返回数据 (服务器常"能连但K线空")
                 probe = c.bars(symbol="000001", category=4, offset=5)
                 if probe is not None and len(probe) > 0:
@@ -247,14 +247,17 @@ class KlineProvider:
         """
         result = {}
 
+        # 在启动线程前只初始化一次；multithread客户端对共享socket请求加锁。
+        client = self.client
+
         def fetch_one(code: str):
-            if self.client is None:
+            if client is None:
                 return code, None
             code = str(code).zfill(6)
             last_error = None
             for attempt in range(2):
                 try:
-                    df = self.client.bars(symbol=code, frequency=0, offset=bars)
+                    df = client.bars(symbol=code, frequency=0, offset=bars)
                     if df is not None and not df.empty:
                         return code, self._normalize_columns(df)
                     return code, None
@@ -275,8 +278,23 @@ class KlineProvider:
                     result[code] = df
 
         # 批次级健康判断: 5分钟线是S2的核心输入, 全空必须换台
-        if unique_codes and not result:
+        if unique_codes and not result and client is not None:
             self._rotate_server(f"5分钟线批量 {len(unique_codes)} 只全部空返回")
+
+        # HTTP只补缺失代码；没有可用TDX时也不提前返回空池。
+        missing = [code for code in unique_codes if code not in result]
+        if missing:
+            from data_provider.http_kline import fetch_stock_5min
+            workers = int(os.getenv('HTTP_KLINE_WORKERS', '4'))
+            with ThreadPoolExecutor(max_workers=min(workers, len(missing))) as executor:
+                futures = {executor.submit(fetch_stock_5min, code, bars): code for code in missing}
+                for future in as_completed(futures):
+                    code = futures[future]
+                    df = future.result()
+                    if df is not None and not df.empty:
+                        result[code] = df
+            http_ok = sum(code in result for code in missing)
+            logger.info(f'5分钟线HTTP补取: {http_ok}/{len(missing)}只; 缺数据={len(missing)-http_ok}')
 
         if result:
             logger.info(f"5分钟线加载: {len(result)}/{len(codes)} 只")

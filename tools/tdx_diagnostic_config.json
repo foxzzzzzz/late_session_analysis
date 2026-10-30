@@ -1,0 +1,13 @@
+{
+  "timeout_seconds": 3,
+  "timeout_seconds_description": "每次TCP连接及网络操作的超时秒数，不是整个扫描的总时限",
+  "workers": 12,
+  "workers_description": "并发诊断节点数；同一节点内客户端和查询均串行执行",
+  "hex_prefix_bytes": 64,
+  "hex_prefix_bytes_description": "记录响应正文前多少字节的十六进制摘要",
+  "queries": [
+    {"name": "stock_daily", "parser": "security", "args": [9, 0, "000001", 0, 5], "description": "平安银行日线：日线频率、深圳市场、代码、起始偏移、根数"},
+    {"name": "index_daily", "parser": "index", "args": [9, 1, "000001", 0, 50], "description": "上证指数日线：日线频率、上海市场、代码、起始偏移、根数"},
+    {"name": "stock_5min", "parser": "security", "args": [0, 0, "000001", 0, 48], "description": "平安银行5分钟线：5分钟频率、深圳市场、代码、起始偏移、根数"}
+  ]
+}
