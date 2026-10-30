@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import json
+import threading
+from contextlib import contextmanager
 from datetime import datetime, date
 from typing import Callable
 
@@ -18,6 +20,45 @@ class PipelineService:
 
     def __init__(self, log_callback: LogCallback | None = None):
         self._callback = log_callback
+        self.run_id = None
+        self._pipeline = None
+        self._completed_stages = {}
+
+    @contextmanager
+    def _capture_runtime_logs(self):
+        """仅转发本次执行线程的业务日志，避免混入其他任务或递归转发。"""
+        service = self
+        owner = threading.get_ident()
+
+        class RuntimeHandler(logging.Handler):
+            stage = 'SYS'
+
+            def emit(self, record):
+                if record.thread != owner or not record.name.startswith(
+                        ('orchestration.', 'data_provider.', 'screening.', 'analysis.')):
+                    return
+                self.stage = getattr(record, 'pipeline_stage', self.stage)
+                try:
+                    counts = getattr(record, 'pipeline_stage_counts', None)
+                    if counts is not None:
+                        service._completed_stages = counts.copy()
+                        if service.run_id is not None:
+                            save_pipeline_progress(service.run_id, counts,
+                                                   getattr(service._pipeline, 'regime', None))
+                    if service._callback:
+                        service._callback(self.stage, record.levelname, record.getMessage())
+                except Exception:
+                    from web.models import db
+                    db.session.rollback()
+                    logger.exception('Failed to persist live pipeline progress')
+
+        handler = RuntimeHandler(level=logging.INFO)
+        root = logging.getLogger()
+        root.addHandler(handler)
+        try:
+            yield
+        finally:
+            root.removeHandler(handler)
 
     def _emit(self, stage: str, level: str, message: str):
         if self._callback:
@@ -28,6 +69,10 @@ class PipelineService:
         getattr(logger, level.lower(), logger.info)(f"[{stage}] {message}")
 
     def run(self, test_mode: bool = True, regime_override: str | None = None) -> dict:
+        with self._capture_runtime_logs():
+            return self._run(test_mode, regime_override)
+
+    def _run(self, test_mode: bool = True, regime_override: str | None = None) -> dict:
         """Execute the full pipeline and return summary stats.
 
         Returns dict with keys: regime, stages (dict), recommendations (list).
@@ -110,6 +155,7 @@ class PipelineService:
         try:
             from orchestration.pipeline import LateSessionPipeline
             pipeline = LateSessionPipeline(config, test_mode=test_mode)
+            self._pipeline = pipeline
             self._emit("SYS", "INFO", "Pipeline instance created")
         except Exception as e:
             self._emit("SYS", "ERROR", f"Failed to create pipeline: {e}")
@@ -124,10 +170,10 @@ class PipelineService:
             self._emit("SYS", "ERROR", f"Pipeline failed: {e}")
             import traceback
             self._emit("SYS", "ERROR", traceback.format_exc()[-500:])
-            return {"regime": getattr(config, "regime_mode", "unknown"), "stages": {}, "recommendations": [], "error": str(e)}
+            return {"regime": getattr(pipeline, "regime", "unknown"), "stages": self._completed_stages.copy(), "recommendations": [], "error": str(e)}
 
         # Extract results
-        regime = config.regime_mode
+        regime = pipeline.regime
 
         # Stage pass counts from tracker
         stages = {}
@@ -135,7 +181,8 @@ class PipelineService:
             tracker = pipeline.tracker
             for stage_name, stage_info in tracker.stages.items():
                 short = stage_name.split("_")[0]  # "S0_板块预筛选" → "S0"
-                stages[short] = stage_info.output_count
+                if stage_info.end_time is not None:
+                    stages[short] = stage_info.output_count
 
         # Recommendations from the last S4 run
         recommendations = []
@@ -181,6 +228,17 @@ class PipelineService:
                    f"S4={stages.get('S4','?')})")
 
         return {"regime": regime, "stages": stages, "recommendations": recommendations}
+
+
+def save_pipeline_progress(run_id: int, stages: dict, regime: str | None = None) -> None:
+    """阶段结束即提交；未结束阶段保持缺失，避免把未运行显示为0。"""
+    from web.models import db, PipelineRun
+    run = db.session.get(PipelineRun, run_id)
+    if run is not None:
+        run.stages_json = json.dumps(stages, ensure_ascii=False)
+        if regime:
+            run.regime = regime
+        db.session.commit()
 
 
 def save_pipeline_results(run_id: int, results: dict) -> None:

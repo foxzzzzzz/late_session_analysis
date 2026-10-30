@@ -271,6 +271,10 @@ body {
     padding: 0.1rem 0;
 }
 
+/* 日志容器不保留模板缩进，仅消息正文保留换行。 */
+.live-terminal { white-space: normal; }
+.live-terminal .log-msg { white-space: pre-wrap; }
+
 .terminal .log-time {
     color: var(--text-muted);
     flex-shrink: 0;

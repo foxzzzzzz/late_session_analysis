@@ -1,11 +1,22 @@
 """Dashboard home page."""
 
 from datetime import date, datetime, timedelta
-from flask import Blueprint, current_app, render_template
+from flask import Blueprint, current_app, render_template, jsonify
 from web.models import db, PipelineRun, DailyRecommendation, SimulatedTrade, BacktestRun
 from web.models import SystemConfig as DbConfig
 
 bp = Blueprint("dashboard", __name__)
+
+
+@bp.route('/api/recent-runs')
+def recent_run_progress():
+    import json
+    runs = PipelineRun.query.order_by(PipelineRun.trading_date.desc()).limit(5).all()
+    response = jsonify(runs=[dict(id=run.id, date=run.trading_date.isoformat(),
+                                  status=run.status, regime=run.regime,
+                                  stages=json.loads(run.stages_json or '{}')) for run in runs])
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 def _get_config(key: str, default: str = "") -> str:

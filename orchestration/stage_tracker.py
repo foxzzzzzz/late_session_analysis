@@ -58,7 +58,8 @@ class StageTracker:
         s = self.stages[stage]
         s.start_time = time.time()
         s.input_count = input_count
-        logger.info(f"[{stage}] 开始, 输入: {input_count} 只")
+        logger.info(f"[{stage}] 开始, 输入: {input_count} 只",
+                    extra={'pipeline_stage': stage.split('_')[0]})
 
     def stage_end(self, stage: str, output_count: int, error: str = ""):
         """某阶段结束"""
@@ -68,7 +69,11 @@ class StageTracker:
         s.output_count = output_count
         if error:
             s.error = error
-        logger.info(f"[{stage}] 完成: {s.input_count}→{output_count} ({s.elapsed:.1f}s)")
+        logger.info(f"[{stage}] 完成: {s.input_count}→{output_count} ({s.elapsed:.1f}s)", extra={
+            'pipeline_stage': stage.split('_')[0],
+            'pipeline_stage_counts': {name.split('_')[0]: info.output_count
+                                      for name, info in self.stages.items() if info.end_time is not None},
+        })
 
     def finish(self) -> dict:
         """完成流水线，返回汇总统计"""

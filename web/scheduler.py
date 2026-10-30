@@ -81,6 +81,7 @@ def _execute_scheduled_pipeline(app: Flask) -> None:
 
         try:
             service = PipelineService(log_callback=on_log)
+            service.run_id = run.id
             results = service.run(test_mode=False)
             if results.get("error"):
                 raise RuntimeError(str(results["error"]))

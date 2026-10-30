@@ -65,9 +65,8 @@
 <div class="row g-3">
     <div class="col-xl-8">
         <div class="card">
-            <div class="card-header">最近执行记录</div>
+            <div class="card-header">最近执行记录 <small class="text-muted ms-2" data-live-note>自动更新</small></div>
             <div class="card-body p-0">
-                {% if recent_runs %}
                 <table class="table table-striped mb-0">
                     <thead>
                         <tr>
@@ -81,7 +80,7 @@
                             <th>S4</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody data-pipeline-recent>
                         {% for run in recent_runs %}
                         <tr>
                             <td>{{ run.trading_date }}</td>
@@ -94,15 +93,11 @@
                             <td>{{ stages.get('S3', '–') }}</td>
                             <td>{{ stages.get('S4', '–') }}</td>
                         </tr>
+                        {% else %}
+                        <tr><td colspan="8" class="text-center text-muted">暂无执行记录</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
-                {% else %}
-                <div class="p-4 text-center text-muted">
-                    <i class="bi bi-inbox" style="font-size: 2rem;"></i>
-                    <p class="mt-2 mb-0">暂无执行记录</p>
-                </div>
-                {% endif %}
             </div>
         </div>
     </div>
@@ -166,6 +161,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/pipeline-progress.js') }}" data-poll-seconds="{{ config.PIPELINE_POLL_SECONDS }}" defer></script>
 <script>
     // Countdown to next 14:35
     const schedulerActive = {{ 'true' if stats.scheduler_active else 'false' }};

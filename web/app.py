@@ -45,6 +45,7 @@ def create_app() -> Flask:
     app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-in-production")
     app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    app.config['PIPELINE_POLL_SECONDS'] = float(os.getenv('WEB_PIPELINE_POLL_SECONDS', '3'))
 
     # ── custom filters ─────────────────────────────────────
     import json as _json

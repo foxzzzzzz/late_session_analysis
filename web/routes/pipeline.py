@@ -93,6 +93,7 @@ def _run_pipeline_in_thread(app, run_id: int, test_mode: bool = True):
 
         with app.app_context():
             service = PipelineService(log_callback=on_log)
+            service.run_id = run_id
 
             try:
                 results = service.run(test_mode=test_mode)
@@ -290,7 +291,10 @@ def _stream_and_run(app, run_id: int, q: queue.Queue, run: PipelineRun):
 
             try:
                 service = PipelineService(log_callback=_emit)
+                service.run_id = run_id
                 results = service.run(test_mode=test_mode)
+                if results.get('error'):
+                    raise RuntimeError(str(results['error']))
                 save_pipeline_results(run_id, results)
                 run_obj = _db.session.get(_PR, run_id)
                 if run_obj:
@@ -419,3 +423,30 @@ def run_detail(run_id: int):
     )
 
     return render_template("pipeline_detail.html", run=run, logs=logs)
+
+
+@bp.route('/status/<int:run_id>')
+def run_status(run_id: int):
+    """分页增量日志及已完成阶段；定时/手动执行均读同一数据库。"""
+    after = request.args.get('after', '0')
+    if not after.isdigit():
+        return jsonify(error='invalid cursor'), 400
+    run = db.session.get(PipelineRun, run_id)
+    if run is None:
+        return jsonify(error='not found'), 404
+    limit = int(os.getenv('WEB_PIPELINE_LOG_PAGE_SIZE', '200'))
+    logs = (PipelineLog.query.filter(PipelineLog.run_id == run_id, PipelineLog.id > int(after))
+            .order_by(PipelineLog.id).limit(limit).all())
+    last = PipelineLog.query.filter_by(run_id=run_id).order_by(PipelineLog.id.desc()).first()
+    response = jsonify(
+        id=run.id, status=run.status, regime=run.regime,
+        stages=json.loads(run.stages_json or '{}'),
+        finished_at=run.finished_at.strftime('%H:%M:%S') if run.finished_at else None,
+        total_logs=PipelineLog.query.filter_by(run_id=run_id).count(),
+        last_progress_at=last.timestamp.strftime('%H:%M:%S') if last else None,
+        cursor=logs[-1].id if logs else int(after),
+        logs=[dict(id=log.id, stage=log.stage, level=log.level, message=log.message,
+                   timestamp=log.timestamp.strftime('%H:%M:%S')) for log in logs],
+    )
+    response.headers['Cache-Control'] = 'no-store'
+    return response
