@@ -32,11 +32,15 @@ SCAN_WORKERS = 20
 # 用于验证的探针股票 (平安银行, 深市)
 PROBE_CODE = "000001"
 PROBE_MARKET = 0
+_SERVER_CONFIG = Path(__file__).with_name("tdx_servers.json")
 
 
 def _collect_servers() -> list[tuple[str, int]]:
     """汇总所有已知 TDX 服务器地址"""
-    servers: list[tuple[str, int]] = []
+    config = json.loads(_SERVER_CONFIG.read_text(encoding="utf-8"))
+    servers: list[tuple[str, int]] = [
+        (addr, int(port)) for addr, port in config["priority_servers"]
+    ]
 
     # tdxpy 内置 (约104个)
     try:
